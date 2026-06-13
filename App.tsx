@@ -1,44 +1,77 @@
 /**
- * Sample React Native App
- * https://github.com/facebook/react-native
- *
- * @format
+ * FlowDeck: Gen-Z Active Mastery AI Tutor
  */
 
-import { NewAppScreen } from '@react-native/new-app-screen';
-import { StatusBar, StyleSheet, useColorScheme, View } from 'react-native';
-import {
-  SafeAreaProvider,
-  useSafeAreaInsets,
-} from 'react-native-safe-area-context';
+import React, { useState } from 'react';
+import { View, StyleSheet } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { DashboardScreen } from './src/screens/DashboardScreen';
+import { SwipeScreen } from './src/screens/SwipeScreen';
+import { VoiceScreen } from './src/screens/VoiceScreen';
+import { Deck, ConceptCard } from './src/services/llmService';
+
+type ScreenState = 'dashboard' | 'swipe' | 'voice';
 
 function App() {
-  const isDarkMode = useColorScheme() === 'dark';
+  const [currentScreen, setCurrentScreen] = useState<ScreenState>('dashboard');
+  const [selectedDeck, setSelectedDeck] = useState<Deck | null>(null);
+  const [selectedCard, setSelectedCard] = useState<ConceptCard | null>(null);
+  const [voiceCallback, setVoiceCallback] = useState<((score: number) => void) | null>(null);
+
+  const handleSelectDeck = (deck: Deck) => {
+    setSelectedDeck(deck);
+    setCurrentScreen('swipe');
+  };
+
+  const handleGoBackToDashboard = () => {
+    setSelectedDeck(null);
+    setCurrentScreen('dashboard');
+  };
+
+  const handleLaunchVoice = (card: ConceptCard, callback: (score: number) => void) => {
+    setSelectedCard(card);
+    setVoiceCallback(() => callback);
+    setCurrentScreen('voice');
+  };
+
+  const handleVoiceComplete = (score: number) => {
+    if (voiceCallback) {
+      voiceCallback(score);
+    }
+    setCurrentScreen('swipe');
+  };
+
+  const handleGoBackToSwipe = () => {
+    setCurrentScreen('swipe');
+  };
 
   return (
-    <SafeAreaProvider>
-      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
-      <AppContent />
+    <SafeAreaProvider style={styles.container}>
+      {currentScreen === 'dashboard' && (
+        <DashboardScreen onSelectDeck={handleSelectDeck} />
+      )}
+      {currentScreen === 'swipe' && selectedDeck && (
+        <SwipeScreen
+          deck={selectedDeck}
+          onGoBack={handleGoBackToDashboard}
+          onVoiceLaunch={handleLaunchVoice}
+        />
+      )}
+      {currentScreen === 'voice' && selectedCard && (
+        <VoiceScreen
+          card={selectedCard}
+          onGoBack={handleGoBackToSwipe}
+          onFeedbackComplete={handleVoiceComplete}
+        />
+      )}
     </SafeAreaProvider>
-  );
-}
-
-function AppContent() {
-  const safeAreaInsets = useSafeAreaInsets();
-
-  return (
-    <View style={styles.container}>
-      <NewAppScreen
-        templateFileName="App.tsx"
-        safeAreaInsets={safeAreaInsets}
-      />
-    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: '#0B0F19',
   },
 });
 
