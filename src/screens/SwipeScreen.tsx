@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   StyleSheet, View, Text, TouchableOpacity, SafeAreaView,
   TextInput, ActivityIndicator, KeyboardAvoidingView, Platform, StatusBar,
@@ -9,21 +9,76 @@ import { llmService, Deck, ConceptCard } from "../services/llmService";
 
 interface Props {
   deck: Deck;
+  initialIndex?: number;
   onBack: () => void;
   onVoiceChallenge: (cardIndex: number) => void;
 }
 
-export const SwipeScreen: React.FC<Props> = ({ deck, onBack, onVoiceChallenge }) => {
+export const SwipeScreen: React.FC<Props> = ({ deck, initialIndex = 0, onBack, onVoiceChallenge }) => {
   const [cards, setCards] = useState<ConceptCard[]>([...deck.cards]);
-  const [currentIndex, setCurrentIndex] = useState(0);
+  const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [isLoading, setIsLoading] = useState(false);
+  const [isSimplifying, setIsSimplifying] = useState(false);
   const [quizInput, setQuizInput] = useState("");
   const [isQuizChecked, setIsQuizChecked] = useState(false);
   const [isQuizCorrect, setIsQuizCorrect] = useState(false);
   const [quizFeedback, setQuizFeedback] = useState("");
 
+  const [isBackgroundLoading, setIsBackgroundLoading] = useState(false);
+  const [remainingPending, setRemainingPending] = useState(deck.pendingPageImages?.length || 0);
+
+  const [inQuiz, setInQuiz] = useState(false);
+  const [quizCard, setQuizCard] = useState<ConceptCard | null>(null);
+  const [lastQuizzedIndex, setLastQuizzedIndex] = useState(-1);
+
+  // Sync state back to persistent storage when cards array changes
+  useEffect(() => {
+    deck.cards = cards;
+    llmService.updateDeck(deck.id, cards);
+  }, [cards, deck]);
+
+  // Handle background card generation when running low
+  useEffect(() => {
+    // Check if remaining cards in current queue is low (<= 5)
+    // and we have remaining pages to scan, and not already loading.
+    if (cards.length - currentIndex <= 5 && remainingPending > 0 && !isBackgroundLoading) {
+      console.log('[SwipeScreen] Low on cards, triggering progressive load. Remaining pages:', remainingPending);
+      setIsBackgroundLoading(true);
+      llmService.loadMoreCardsForDeck(deck.id, (newCards) => {
+        if (newCards && newCards.length > 0) {
+          setCards(prev => [...prev, ...newCards]);
+          console.log('[SwipeScreen] Appended new cards to UI state:', newCards.length);
+        }
+      }).then(() => {
+        const remaining = deck.pendingPageImages?.length || 0;
+        setRemainingPending(remaining);
+        console.log('[SwipeScreen] Background scan batch complete. Remaining pages:', remaining);
+      }).catch(err => {
+        console.log('[SwipeScreen] Error in background card generation:', err);
+      }).finally(() => {
+        setIsBackgroundLoading(false);
+      });
+    }
+  }, [currentIndex, cards.length, remainingPending, isBackgroundLoading, deck.id]);
+
+  // Interstitial Quiz trigger: after studying every 4 cards, test on one of them
+  useEffect(() => {
+    if (currentIndex > 0 && currentIndex % 4 === 0 && currentIndex !== lastQuizzedIndex && !inQuiz) {
+      const startIndex = currentIndex - 4;
+      const prevCards = cards.slice(startIndex, currentIndex);
+      if (prevCards.length > 0) {
+        // Pick one at random from the block we just studied
+        const randomCard = prevCards[Math.floor(Math.random() * prevCards.length)];
+        setQuizCard(randomCard);
+        setInQuiz(true);
+        setLastQuizzedIndex(currentIndex);
+        console.log('[SwipeScreen] Triggering interstitial quiz on:', randomCard.concept);
+      }
+    }
+  }, [currentIndex, cards, inQuiz, lastQuizzedIndex]);
+
   const activeCard = cards[currentIndex];
-  const isQuizCard = activeCard && (currentIndex + 1) % 5 === 0 && !activeCard.isMastered;
+  const isQuizCard = inQuiz && quizCard !== null;
   const progress = cards.length > 0 ? currentIndex / cards.length : 0;
 
   const handleSwipeRight = () => {
@@ -37,31 +92,38 @@ export const SwipeScreen: React.FC<Props> = ({ deck, onBack, onVoiceChallenge })
   };
 
   const handleSwipeLeft = async () => {
-    setIsLoading(true);
+    if (isSimplifying) return;
+    setIsSimplifying(true);
     try {
       const simpler = await llmService.simplifyConcept(activeCard);
       setCards(prev => {
         const updated = [...prev];
-        updated[currentIndex] = { ...updated[currentIndex], concept: simpler, scoreRetention: Math.max(0, (updated[currentIndex].scoreRetention ?? 50) - 10) };
+        updated[currentIndex] = { ...updated[currentIndex], explanation: simpler, scoreRetention: Math.max(0, (updated[currentIndex].scoreRetention ?? 50) - 10) };
         return updated;
       });
-    } catch {}
-    setIsLoading(false);
-    setCurrentIndex(prev => prev + 1);
+    } catch (e) {
+      console.log('[SwipeScreen] Error simplifying explanation:', e);
+    } finally {
+      setIsSimplifying(false);
+      // DO NOT increment currentIndex so the user remains on this card to read the simplified explanation!
+    }
   };
 
   const handleCheckQuiz = async () => {
-    if (!quizInput.trim()) return;
+    if (!quizInput.trim() || !quizCard) return;
     setIsLoading(true);
     try {
-      const result = await llmService.evaluateQuizAnswer(activeCard, quizInput);
+      const result = await llmService.evaluateQuizAnswer(quizCard, quizInput);
       setIsQuizCorrect(result.correct);
       setQuizFeedback(result.feedback);
       setIsQuizChecked(true);
       if (result.correct) {
         setCards(prev => {
           const updated = [...prev];
-          updated[currentIndex] = { ...updated[currentIndex], scoreTransfer: 100 };
+          const targetIndex = updated.findIndex(c => c.id === quizCard.id);
+          if (targetIndex !== -1) {
+            updated[targetIndex] = { ...updated[targetIndex], scoreTransfer: 100 };
+          }
           return updated;
         });
       }
@@ -75,12 +137,28 @@ export const SwipeScreen: React.FC<Props> = ({ deck, onBack, onVoiceChallenge })
 
   const handleNextAfterQuiz = () => {
     setQuizInput(""); setIsQuizChecked(false); setIsQuizCorrect(false); setQuizFeedback("");
-    setCurrentIndex(prev => prev + 1);
+    setInQuiz(false); setQuizCard(null);
+    // DO NOT increment currentIndex here as they are returning to the current card!
   };
 
   const masteredCount = cards.filter(c => c.isMastered).length;
 
-  if (!activeCard || currentIndex >= cards.length) {
+  if (currentIndex >= cards.length && (remainingPending > 0 || isBackgroundLoading)) {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <StatusBar barStyle="light-content" />
+        <View style={styles.loadingWrap}>
+          <ActivityIndicator size="large" color={theme.colors.primary} />
+          <Text style={styles.loadingText}>Reading next PDF pages...</Text>
+          <Text style={{ color: theme.colors.textSecondary, fontSize: 13, marginTop: 4, textAlign: 'center' }}>
+            AI is generating more flashcards in the background.
+          </Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (!isQuizCard && (!activeCard || currentIndex >= cards.length)) {
     return (
       <SafeAreaView style={styles.safe}>
         <StatusBar barStyle="light-content" />
@@ -145,7 +223,7 @@ export const SwipeScreen: React.FC<Props> = ({ deck, onBack, onVoiceChallenge })
         <KeyboardAvoidingView style={styles.quizWrap} behavior={Platform.OS === "ios" ? "padding" : undefined}>
           <View style={styles.quizCard}>
             <View style={styles.quizBadge}><Text style={styles.quizBadgeText}>🎯 QUIZ TIME</Text></View>
-            <Text style={styles.quizQ}>{activeCard.quizQuestion || `Explain the concept: "${activeCard.concept.slice(0, 80)}..."`}</Text>
+            <Text style={styles.quizQ}>{quizCard?.quizQuestion || `Explain the concept: "${quizCard?.concept?.slice(0, 80)}..."`}</Text>
             {!isQuizChecked ? (
               <>
                 <TextInput
@@ -170,20 +248,43 @@ export const SwipeScreen: React.FC<Props> = ({ deck, onBack, onVoiceChallenge })
                 </Text>
                 <Text style={styles.feedbackText}>{quizFeedback}</Text>
                 <TouchableOpacity style={[styles.nextBtn, { backgroundColor: isQuizCorrect ? theme.colors.success : theme.colors.primary }]} onPress={handleNextAfterQuiz}>
-                  <Text style={styles.nextBtnText}>{isQuizCorrect ? "Continue →" : "Try Next Card →"}</Text>
+                  <Text style={styles.nextBtnText}>Continue →</Text>
                 </TouchableOpacity>
               </View>
             )}
           </View>
         </KeyboardAvoidingView>
       ) : (
-        <SwipeCard
-          card={activeCard}
-          isTop={true}
-          onSwipeLeft={() => { handleSwipeLeft(); }}
-          onSwipeRight={handleSwipeRight}
-          onVoiceLoop={() => onVoiceChallenge(currentIndex)}
-        />
+        <View style={{ flex: 1, justifyContent: 'center' }}>
+          <SwipeCard
+            key={activeCard.id}
+            card={activeCard}
+            isTop={true}
+            isLoading={isSimplifying}
+            onSwipeLeft={() => { handleSwipeLeft(); }}
+            onSwipeRight={handleSwipeRight}
+            onVoiceLoop={() => onVoiceChallenge(currentIndex)}
+          />
+          <TouchableOpacity 
+            style={[styles.simplifyCardButton, isSimplifying && { opacity: 0.7 }]} 
+            onPress={handleSwipeLeft}
+            disabled={isSimplifying}
+          >
+            {isSimplifying ? (
+              <ActivityIndicator size="small" color={theme.colors.primary} />
+            ) : (
+              <Text style={styles.simplifyCardButtonText}>💡 Simplify Explanation</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Background generation loader */}
+      {isBackgroundLoading && (
+        <View style={styles.backgroundLoader}>
+          <ActivityIndicator size="small" color={theme.colors.accent} style={{ marginRight: 8 }} />
+          <Text style={styles.backgroundLoaderText}>AI is scanning next pages in the background...</Text>
+        </View>
       )}
 
       {/* Swipe hints */}
@@ -256,4 +357,40 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.4, shadowRadius: 10, elevation: 5,
   },
   backBtnText: { color: "#fff", fontWeight: "800", fontSize: 16 },
+  backgroundLoader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: theme.colors.surface,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: theme.borderRadius.full,
+    borderWidth: 1,
+    borderColor: theme.colors.cardBorder,
+    marginHorizontal: 32,
+    marginBottom: 16,
+    alignSelf: 'center',
+  },
+  backgroundLoaderText: {
+    color: theme.colors.textSecondary,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  simplifyCardButton: {
+    backgroundColor: 'rgba(57,117,255,0.1)',
+    borderWidth: 1.5,
+    borderColor: theme.colors.primary,
+    borderRadius: theme.borderRadius.md,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    marginTop: 16,
+    alignSelf: 'center',
+    width: '90%',
+    alignItems: 'center',
+  },
+  simplifyCardButtonText: {
+    color: theme.colors.primary,
+    fontWeight: '800',
+    fontSize: 14,
+  },
 });

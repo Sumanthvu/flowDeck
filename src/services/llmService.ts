@@ -1,4 +1,10 @@
 import { LlamaContext, initLlama } from 'llama.rn';
+import RNBlobUtil from 'react-native-blob-util';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as pdfService from './pdfService';
+
+const MODEL_URL = 'https://huggingface.co/Qwen/Qwen2-0.5B-Instruct-GGUF/resolve/main/qwen2-0_5b-instruct-q4_k_m.gguf';
+const MODEL_PATH = `${RNBlobUtil.fs.dirs.DocumentDir}/qwen2-0_5b-instruct-q4_k_m.gguf`;
 
 export interface ConceptCard {
   id: string;
@@ -17,42 +23,130 @@ export interface Deck {
   id: string;
   title: string;
   cards: ConceptCard[];
+  pendingPageImages?: string[]; // Converted image paths waiting for OCR
+  isIncremental?: boolean;      // True if deck has pending pages
+  isGeneratingMore?: boolean;   // Active background generation flag
 }
 
 // In-memory storage for user-created decks (no mock data)
 let userDecks: Deck[] = [];
+const DECKS_STORAGE_KEY = '@flowdeck_decks';
+let isDecksLoaded = false;
+
 let llamaContext: LlamaContext | null = null;
 let isModelLoading = false;
 
+// Ensures the local LLM is loaded before any LLM-dependent call.
+// Throws if the model cannot be loaded.
+async function ensureModelLoaded(): Promise<void> {
+  if (llamaContext) return;
+
+  const loaded = await llmService.loadModel();
+  if (!loaded || !llamaContext) {
+    throw new Error(
+      'Local LLM model is not available. Make sure the model file is bundled with the app and try again.'
+    );
+  }
+}
+
 export const llmService = {
   // Load the LLM model (requires model file to be bundled)
-  loadModel: async (): Promise<boolean> => {
+  loadModel: async (onProgress?: (progress: number, text: string) => void): Promise<boolean> => {
     if (llamaContext) return true;
     if (isModelLoading) return false;
 
     isModelLoading = true;
-    console.log('[LLM] Loading model...');
+    console.log('[LLM] loadModel called');
 
     try {
-      // Note: This requires a model file to be bundled with the app
-      // For now, we'll work with text processing until a model is available
+      const exists = await RNBlobUtil.fs.exists(MODEL_PATH);
+      if (!exists) {
+        console.log('[LLM] Model not found locally. Starting download...');
+        if (onProgress) onProgress(0, 'Downloading AI Model (350MB)...');
+
+        await RNBlobUtil.config({
+          path: MODEL_PATH,
+        })
+          .fetch('GET', MODEL_URL)
+          .progress((received: string | number, total: string | number) => {
+            const rec = Number(received);
+            const tot = Number(total);
+            const progress = tot > 0 ? rec / tot : 0;
+            if (onProgress) {
+              onProgress(progress, `Downloading AI Model (${Math.round(progress * 100)}%)...`);
+            }
+          });
+        console.log('[LLM] Download completed successfully');
+      }
+
+      if (onProgress) onProgress(1, 'Initializing AI engine...');
+      console.log('[LLM] Initializing llama.rn with model:', MODEL_PATH);
+
       llamaContext = await initLlama({
-        model: 'models/llama-2-7b-chat.Q4_K_M.gguf',
+        model: MODEL_PATH,
+        n_ctx: 2048,
         n_gpu_layers: 0, // Use CPU only
       });
+
       console.log('[LLM] Model loaded successfully');
+      if (onProgress) onProgress(1, 'AI Engine Ready');
       return true;
     } catch (err) {
-      console.log('[LLM] Model not available, using text processing:', err);
-      // Continue without model - text processing will work
+      console.log('[LLM] Model failed to load/download:', err);
+      try {
+        const exists = await RNBlobUtil.fs.exists(MODEL_PATH);
+        if (exists) {
+          await RNBlobUtil.fs.unlink(MODEL_PATH);
+        }
+      } catch (cleanupErr) {
+        console.log('[LLM] Cleanup failed:', cleanupErr);
+      }
+      llamaContext = null;
+      if (onProgress) onProgress(0, `Error: ${err instanceof Error ? err.message : err}`);
       return false;
     } finally {
       isModelLoading = false;
     }
   },
 
+  // Save all decks to AsyncStorage
+  saveDecks: async (): Promise<void> => {
+    try {
+      // Avoid saving the runtime volatile boolean flag
+      const serializedDecks = userDecks.map(d => ({
+        ...d,
+        isGeneratingMore: false,
+      }));
+      await AsyncStorage.setItem(DECKS_STORAGE_KEY, JSON.stringify(serializedDecks));
+      console.log('[LLM] Decks successfully saved to AsyncStorage');
+    } catch (err) {
+      console.log('[LLM] Error saving decks to AsyncStorage:', err);
+    }
+  },
+
+  // Load all decks from AsyncStorage
+  loadDecks: async (): Promise<Deck[]> => {
+    if (isDecksLoaded) return userDecks;
+    try {
+      const stored = await AsyncStorage.getItem(DECKS_STORAGE_KEY);
+      if (stored) {
+        userDecks = JSON.parse(stored);
+        console.log('[LLM] Loaded', userDecks.length, 'decks from AsyncStorage');
+      } else {
+        userDecks = [];
+      }
+      isDecksLoaded = true;
+    } catch (err) {
+      console.log('[LLM] Error loading decks from AsyncStorage:', err);
+      userDecks = [];
+      isDecksLoaded = true;
+    }
+    return userDecks;
+  },
+
   // Get all user decks
   getDecks: async (): Promise<Deck[]> => {
+    await llmService.loadDecks();
     console.log('[LLM] getDecks called, returning user decks:', userDecks.length);
     return userDecks;
   },
@@ -60,12 +154,29 @@ export const llmService = {
   // Clear all decks
   clearAllDecks: async (): Promise<void> => {
     userDecks = [];
-    console.log('[LLM] All decks cleared');
+    try {
+      await AsyncStorage.removeItem(DECKS_STORAGE_KEY);
+      console.log('[LLM] All decks cleared');
+    } catch (err) {
+      console.log('[LLM] Error clearing decks from AsyncStorage:', err);
+    }
   },
 
-  // Generate cards from text using intelligent text processing
+  // Update a single deck's cards and save
+  updateDeck: async (deckId: string, updatedCards: ConceptCard[]): Promise<void> => {
+    const deck = userDecks.find(d => d.id === deckId);
+    if (deck) {
+      deck.cards = updatedCards;
+      await llmService.saveDecks();
+    }
+  },
+
+  // Generate cards from text using the local LLM only.
+  // Will log errors and skip chunks that fail, returning a deck from successful ones.
   generateCardsFromText: async (title: string, rawText: string): Promise<Deck> => {
     console.log('[LLM] generateCardsFromText called with title:', title, 'text length:', rawText.length);
+
+    await ensureModelLoaded();
 
     // Step 1: Clean and normalize the text
     const cleanText = rawText
@@ -74,203 +185,413 @@ export const llmService = {
       .replace(/\n{3,}/g, '\n\n')
       .trim();
 
-    // Step 2: Split into meaningful chunks (paragraphs or sections)
-    const paragraphs = cleanText
-      .split(/\n\n+/)
-      .map(p => p.trim())
-      .filter(p => p.length > 30); // Filter out short fragments
+    // Step 2: Split into meaningful overlapping sentence windows
+    const paragraphs = pdfService.chunkTextIntoWindows(cleanText);
 
     console.log('[LLM] Found paragraphs:', paragraphs.length);
 
-    // Step 3: Generate cards from each chunk
+    if (paragraphs.length === 0) {
+      throw new Error('No usable text found to generate flashcards from.');
+    }
+
+    // Step 3: Generate cards from each chunk using the LLM
     const cards: ConceptCard[] = [];
 
     for (let i = 0; i < paragraphs.length; i++) {
       const chunk = paragraphs[i];
-
-      // Extract key concept from the chunk (first meaningful sentence)
-      const sentences = chunk.split(/[.!?]+/).map(s => s.trim()).filter(s => s.length > 10);
-      const concept = sentences[0]?.substring(0, 60) || `Concept ${i + 1}`;
-
-      // Create explanation (use the full chunk or first 2 sentences)
-      const explanationLines = chunk.split('\n').filter(l => l.trim().length > 20);
-      const explanation = explanationLines.slice(0, 3).join('\n') || chunk.substring(0, 200);
-
-      // Generate a relevant quiz question based on the content
-      const quizQuestion = llmService._generateQuizQuestion(concept, chunk);
-      const quizAnswer = llmService._generateQuizAnswer(chunk);
-
-      cards.push({
-        id: `card-${Date.now()}-${i}`,
-        concept: concept,
-        explanation: explanation,
-        quizQuestion: quizQuestion,
-        quizAnswer: quizAnswer,
-        isMastered: false,
-        scoreRecall: 0,
-        scoreRetention: 0,
-        scoreTransfer: 0,
-      });
+      try {
+        console.log(`[LLM] Generating card ${i + 1} of ${paragraphs.length}...`);
+        const card = await llmService._generateCardWithLLM(chunk, i);
+        if (card) {
+          // Concept duplication check
+          const isDuplicate = cards.some(
+            c => c.concept.toLowerCase().trim() === card.concept.toLowerCase().trim()
+          );
+          if (isDuplicate) {
+            console.log(`[LLM] Skipping duplicate card concept: "${card.concept}"`);
+          } else {
+            cards.push(card);
+          }
+        } else {
+          console.log(`[LLM] Warning: Failed to generate card for chunk ${i + 1}. Skipping.`);
+        }
+      } catch (err) {
+        console.log(`[LLM] Error generating card for chunk ${i + 1}:`, err);
+      }
     }
 
-    // Fallback if no cards created
     if (cards.length === 0) {
-      const fallbackCard = llmService._createFallbackCard(rawText);
-      cards.push(fallbackCard);
+      throw new Error('Local AI engine failed to extract any valid flashcards from the document. Please try a different section or text.');
     }
 
     // Create the deck
     const newDeck: Deck = {
       id: `deck-${Date.now()}`,
       title: title || 'Imported Content',
-      cards: cards.slice(0, 20), // Max 20 cards per deck
+      cards: cards, // No arbitrary limit - include all generated cards
     };
 
     // Save to user decks
     userDecks.push(newDeck);
     console.log('[LLM] Created deck with', cards.length, 'cards');
 
+    await llmService.saveDecks(); // Save to AsyncStorage!
+
     return newDeck;
   },
 
-  // Helper: Generate a quiz question from content
-  _generateQuizQuestion: (concept: string, _context: string): string => {
-    const questionTemplates = [
-      `What is the main idea of: "${concept.substring(0, 30)}..."?`,
-      `Explain the key concept about "${concept.substring(0, 25)}..."`,
-      `Can you describe what "${concept.substring(0, 30)}..." means?`,
-      `What are the important points about "${concept.substring(0, 25)}..."?`,
-    ];
-    return questionTemplates[Math.floor(Math.random() * questionTemplates.length)];
+  // Generate card using LLM inference. Returns null if the LLM response
+  // could not be parsed into a valid card (caller skips this chunk).
+  _generateCardWithLLM: async (chunk: string, index: number): Promise<ConceptCard | null> => {
+    if (!llamaContext) return null;
+
+    // Use ChatML formatting
+    const prompt = `<|im_start|>system
+You are a flashcard generator. Given the following text chunk, create a single flashcard.
+If the text does NOT contain any meaningful educational concepts, core facts, definitions, or study material (e.g. if it consists only of cover page metadata, table of contents, references, copyright declarations, page numbers, index entries, or blank/garbage lines), return ONLY the word: null
+Otherwise, return ONLY valid JSON with this exact structure, with no markdown formatting or comments:
+{
+  "concept": "Brief title (max 60 chars)",
+  "explanation": "Clear explanation of the concept",
+  "quizQuestion": "A question to test understanding",
+  "quizAnswer": "The answer to the quiz question"
+}<|im_end|>
+<|im_start|>user
+Text: "${chunk.substring(0, 500)}"<|im_end|>
+<|im_start|>assistant
+`;
+
+    console.log(`[LLM-DEBUG] ========================================`);
+    console.log(`[LLM-DEBUG] LLM CALL: _generateCardWithLLM (Index: ${index})`);
+    console.log(`[LLM-DEBUG] FULL TEXT CHUNK (first 1000 chars):\n${chunk.substring(0, 1000)}`);
+    console.log(`[LLM-DEBUG] PROMPT SENT TO LLM:\n${prompt}`);
+    console.log(`[LLM-DEBUG] ----------------------------------------`);
+
+    try {
+      const result = await llamaContext.completion({
+        prompt: prompt,
+        n_predict: 350,
+        temperature: 0.3,
+        top_p: 0.9,
+        top_k: 40,
+        penalty_repeat: 1.15,
+        stop: ['<|im_end|>', '<|endoftext|>'],
+      });
+
+      const fullResponseText = result.text.trim();
+      console.log(`[LLM-DEBUG] RAW RESPONSE:\n${fullResponseText}`);
+
+      if (fullResponseText === 'null' || fullResponseText.toLowerCase() === 'null') {
+        console.log('[LLM-DEBUG] DECISION: Chunker skipped irrelevant content (returned null)');
+        console.log(`[LLM-DEBUG] ========================================`);
+        return null;
+      }
+
+      const jsonMatch = fullResponseText.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        console.log('[LLM-DEBUG] DECISION: Failed - No JSON found in response');
+        console.log(`[LLM-DEBUG] ========================================`);
+        return null;
+      }
+
+      const cardData = JSON.parse(jsonMatch[0]);
+
+      if (!cardData.concept || !cardData.explanation || !cardData.quizQuestion || !cardData.quizAnswer) {
+        console.log('[LLM-DEBUG] DECISION: Failed - Card data missing required fields:', JSON.stringify(cardData));
+        console.log(`[LLM-DEBUG] ========================================`);
+        return null;
+      }
+
+      console.log('[LLM-DEBUG] DECISION: Success - Card generated:', JSON.stringify(cardData, null, 2));
+      console.log(`[LLM-DEBUG] ========================================`);
+
+      return {
+        id: `card-${Date.now()}-${index}`,
+        concept: cardData.concept,
+        explanation: cardData.explanation,
+        quizQuestion: cardData.quizQuestion,
+        quizAnswer: cardData.quizAnswer,
+        isMastered: false,
+        scoreRecall: 0,
+        scoreRetention: 0,
+        scoreTransfer: 0,
+      };
+    } catch (err) {
+      console.log('[LLM-DEBUG] ERROR generating card:', err);
+      console.log(`[LLM-DEBUG] ========================================`);
+      return null;
+    }
   },
 
-  // Helper: Generate quiz answer from content
-  _generateQuizAnswer: (context: string): string => {
-    // Take first 2 sentences as the answer
-    const sentences = context.split(/[.!?]+/).map(s => s.trim()).filter(s => s.length > 10);
-    return sentences.slice(0, 2).join('. ') || context.substring(0, 150);
-  },
-
-  // Helper: Create fallback card for short text
-  _createFallbackCard: (text: string): ConceptCard => {
-    const firstPart = text.substring(0, 100);
-    return {
-      id: `card-${Date.now()}-fallback`,
-      concept: 'Imported Content',
-      explanation: text.substring(0, 200),
-      quizQuestion: `What does the imported content cover?`,
-      quizAnswer: firstPart,
-      isMastered: false,
-      scoreRecall: 0,
-      scoreRetention: 0,
-      scoreTransfer: 0,
-    };
-  },
-
-  // Simplify explanation using text analysis (or LLM if available)
+  // Simplify explanation using the local LLM only.
   simplifyExplanation: async (concept: string, previousExplanation: string): Promise<string> => {
     console.log('[LLM] simplifyExplanation called for:', concept);
 
-    // Use rule-based simplification
-    const analogies: Record<string, string> = {
-      'inertia': 'Think of a hockey puck on ice - it keeps sliding until something stops it.',
-      'force': 'Force is like a push or pull - the harder you push, the faster things move.',
-      'acceleration': 'Acceleration is how quickly speed changes - stepping on the gas pedal.',
-      'velocity': 'Velocity is speed in a specific direction - like 60mph going north.',
-      'momentum': 'Momentum is how much "oomph" a moving object has - a truck hitting you harder than a bike.',
-      'energy': 'Energy is the ability to do work - like food gives you energy to move.',
-      'gravity': 'Gravity is what pulls things down - it keeps you on the ground.',
-      'pressure': 'Pressure is force spread over an area - like sitting on a sharp needle.',
-      'temperature': 'Temperature measures how hot or cold something is.',
-      'entropy': 'Entropy is about disorder - things naturally become more messy over time.',
-    };
+    await ensureModelLoaded();
 
-    const lowerConcept = concept.toLowerCase();
-    for (const [key, analogy] of Object.entries(analogies)) {
-      if (lowerConcept.includes(key)) {
-        return analogy;
+    const prompt = `<|im_start|>system
+You are a tutor. Rewrite the explanation of the concept so it is simpler and easier to understand, ideally using a short analogy. Keep it to 1-3 sentences.
+Return ONLY the simplified explanation text, with no preamble, labels, or quotation marks.<|im_end|>
+<|im_start|>user
+Concept: "${concept}"
+Original explanation: "${previousExplanation}"<|im_end|>
+<|im_start|>assistant
+`;
+
+    console.log(`[LLM-DEBUG] ========================================`);
+    console.log(`[LLM-DEBUG] LLM CALL: simplifyExplanation`);
+    console.log(`[LLM-DEBUG] PROMPT SENT TO LLM:\n${prompt}`);
+    console.log(`[LLM-DEBUG] ----------------------------------------`);
+
+    try {
+      const result = await llamaContext!.completion({
+        prompt: prompt,
+        n_predict: 200,
+        temperature: 0.5,
+        top_p: 0.9,
+        top_k: 40,
+        penalty_repeat: 1.15,
+        stop: ['<|im_end|>', '<|endoftext|>'],
+      });
+
+      const simplified = result.text.trim();
+      console.log(`[LLM-DEBUG] RAW RESPONSE:\n${simplified}`);
+      console.log(`[LLM-DEBUG] ========================================`);
+
+      if (!simplified) {
+        throw new Error('AI engine returned an empty response.');
       }
+      return simplified;
+    } catch (err) {
+      console.log('[LLM-DEBUG] ERROR simplifying explanation:', err);
+      console.log(`[LLM-DEBUG] ========================================`);
+      throw new Error(`Failed to simplify explanation: ${err instanceof Error ? err.message : err}`);
     }
-
-    // Default simplification - make it shorter and simpler
-    const sentences = previousExplanation.split('.').filter(s => s.trim().length > 10);
-    return sentences[0] + '. In simple terms, this means ' + previousExplanation.split('.')[0].toLowerCase() + '.';
   },
 
   simplifyConcept: async (card: ConceptCard): Promise<string> => {
     return llmService.simplifyExplanation(card.concept, card.explanation);
   },
 
-  // Grade explanation using keyword matching (or LLM if available)
+  // Grade explanation using the local LLM only.
   gradeExplanation: async (
     card: ConceptCard,
     studentTranscript: string
   ): Promise<{ grade: 'A' | 'B' | 'C' | 'F'; feedback: string; score: number }> => {
     console.log('[LLM] gradeExplanation called for concept:', card.concept);
 
-    const transcript = studentTranscript.toLowerCase().trim();
-    const conceptKeywords = card.concept.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+    await ensureModelLoaded();
 
-    // Check for keyword coverage
-    let matchCount = 0;
-    conceptKeywords.forEach(word => {
-      if (transcript.includes(word)) matchCount++;
-    });
+    const prompt = `<|im_start|>system
+You are grading a student's spoken explanation of a concept.
+Grade the student's explanation based on accuracy and completeness compared to the reference explanation.
+Return ONLY valid JSON with this exact structure, with no markdown formatting:
+{
+  "grade": "A" | "B" | "C" | "F",
+  "feedback": "one or two sentences of feedback",
+  "score": 0-100
+}<|im_end|>
+<|im_start|>user
+Concept: "${card.concept}"
+Reference explanation: "${card.explanation}"
+Student's explanation: "${studentTranscript}"<|im_end|>
+<|im_start|>assistant
+{`;
 
-    // Check for understanding indicators
-    const understandingIndicators = ['because', 'means', 'implies', 'therefore', 'result', 'causes', 'effect'];
-    const hasUnderstanding = understandingIndicators.some(ind => transcript.includes(ind));
+    console.log(`[LLM-DEBUG] ========================================`);
+    console.log(`[LLM-DEBUG] LLM CALL: gradeExplanation`);
+    console.log(`[LLM-DEBUG] PROMPT SENT TO LLM:\n${prompt}`);
+    console.log(`[LLM-DEBUG] ----------------------------------------`);
 
-    let grade: 'A' | 'B' | 'C' | 'F';
-    let feedback: string;
-    let score: number;
+    try {
+      const result = await llamaContext!.completion({
+        prompt: prompt,
+        n_predict: 250,
+        temperature: 0.3,
+        top_p: 0.9,
+        top_k: 40,
+        penalty_repeat: 1.15,
+        stop: ['<|im_end|>', '<|endoftext|>'],
+      });
 
-    if (transcript.length < 20) {
-      grade = 'F';
-      feedback = 'Too short. Try explaining the concept in your own words with more detail.';
-      score = 15;
-    } else if (matchCount >= 2 || hasUnderstanding) {
-      grade = 'A';
-      feedback = 'Excellent! You captured the key concepts and explained them clearly.';
-      score = 95;
-    } else if (transcript.length > 50 && conceptKeywords.some(w => transcript.includes(w.substring(0, 4)))) {
-      grade = 'B';
-      feedback = 'Good attempt. Try to connect the concepts more explicitly.';
-      score = 75;
-    } else {
-      grade = 'C';
-      feedback = 'Partial understanding. Can you explain the cause and effect relationship?';
-      score = 45;
+      const fullText = '{' + result.text;
+      console.log(`[LLM-DEBUG] RAW RESPONSE (including prepended brace):\n${fullText}`);
+      console.log(`[LLM-DEBUG] ----------------------------------------`);
+
+      const jsonMatch = fullText.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        throw new Error('AI engine did not return valid JSON.');
+      }
+
+      const gradeData = JSON.parse(jsonMatch[0]);
+
+      if (!gradeData || !gradeData.grade || !gradeData.feedback) {
+        throw new Error('AI engine returned malformed grading data.');
+      }
+
+      const grade = gradeData.grade.toUpperCase().trim();
+      if (!['A', 'B', 'C', 'F'].includes(grade)) {
+        throw new Error(`AI engine returned an invalid grade: "${grade}"`);
+      }
+
+      let score = typeof gradeData.score === 'number' ? gradeData.score : 0;
+      if (typeof gradeData.score !== 'number') {
+        if (grade === 'A') score = 95;
+        else if (grade === 'B') score = 80;
+        else if (grade === 'C') score = 60;
+        else score = 30;
+      }
+
+      console.log('[LLM-DEBUG] DECISION: Grading success:', JSON.stringify({ grade, feedback: gradeData.feedback, score }, null, 2));
+      console.log(`[LLM-DEBUG] ========================================`);
+
+      return {
+        grade: grade as 'A' | 'B' | 'C' | 'F',
+        feedback: gradeData.feedback,
+        score: score,
+      };
+    } catch (err) {
+      console.log('[LLM-DEBUG] ERROR grading explanation:', err);
+      console.log(`[LLM-DEBUG] ========================================`);
+      throw new Error(`Failed to grade explanation: ${err instanceof Error ? err.message : err}`);
     }
-
-    console.log('[LLM] Grading result:', grade, 'score:', score);
-    return { grade, feedback, score };
   },
 
-  // Validate quiz answer
-  validateQuizAnswer: async (_question: string, correctAnswer: string, studentAnswer: string): Promise<boolean> => {
+  // Validate quiz answer using the local LLM only.
+  validateQuizAnswer: async (card: ConceptCard, studentAnswer: string): Promise<boolean> => {
     console.log('[LLM] validateQuizAnswer called');
 
-    const student = studentAnswer.toLowerCase().trim();
-    const correct = correctAnswer.toLowerCase().trim();
+    await ensureModelLoaded();
 
-    // Direct match
-    if (student.includes(correct) || correct.includes(student)) return true;
+    const prompt = `<|im_start|>system
+You are a teacher grading a student's answer to a quiz question.
+You will be given the original flashcard details (Concept and Explanation), the Quiz Question, the Correct Answer, and the Student's Answer.
+Compare the Student's Answer to the Correct Answer using the Flashcard Explanation as context.
+Does the Student's Answer show a correct understanding and answer the question correctly?
+Respond with ONLY "YES" or "NO". Do not write any other explanation or words.<|im_end|>
+<|im_start|>user
+Flashcard Concept: "${card.concept}"
+Flashcard Explanation: "${card.explanation}"
+Quiz Question: "${card.quizQuestion}"
+Correct Answer: "${card.quizAnswer}"
+Student's Answer: "${studentAnswer}"<|im_end|>
+<|im_start|>assistant
+`;
 
-    // Key word matching
-    const correctWords = correct.split(/\s+/).filter(w => w.length > 3);
-    const matchedWords = correctWords.filter(w => student.includes(w));
+    console.log(`[LLM-DEBUG] ========================================`);
+    console.log(`[LLM-DEBUG] LLM CALL: validateQuizAnswer`);
+    console.log(`[LLM-DEBUG] PROMPT SENT TO LLM:\n${prompt}`);
+    console.log(`[LLM-DEBUG] ----------------------------------------`);
 
-    return matchedWords.length >= Math.max(1, Math.floor(correctWords.length / 2));
+    try {
+      const result = await llamaContext!.completion({
+        prompt: prompt,
+        n_predict: 10,
+        temperature: 0.1,
+        top_p: 0.9,
+        top_k: 40,
+        penalty_repeat: 1.15,
+        stop: ['<|im_end|>', '<|endoftext|>'],
+      });
+
+      const response = result.text.trim().toUpperCase();
+      console.log(`[LLM-DEBUG] RAW RESPONSE:\n${response}`);
+      console.log(`[LLM-DEBUG] ----------------------------------------`);
+
+      const hasYes = response.includes('YES');
+      console.log(`[LLM-DEBUG] DECISION: Graded correct = ${hasYes}`);
+      console.log(`[LLM-DEBUG] ========================================`);
+
+      if (response.includes('YES')) return true;
+      if (response.includes('NO')) return false;
+
+      return response.indexOf('YES') !== -1;
+    } catch (err) {
+      console.log('[LLM-DEBUG] ERROR validating quiz answer:', err);
+      console.log(`[LLM-DEBUG] ========================================`);
+      throw new Error(`Failed to validate quiz answer: ${err instanceof Error ? err.message : err}`);
+    }
   },
 
   evaluateQuizAnswer: async (card: ConceptCard, studentAnswer: string): Promise<{ correct: boolean; feedback: string }> => {
-    const correct = await llmService.validateQuizAnswer(card.quizQuestion, card.quizAnswer, studentAnswer);
+    const correct = await llmService.validateQuizAnswer(card, studentAnswer);
     return {
       correct,
       feedback: correct
         ? "Correct! Great job understanding the material."
         : `Not quite. The key point is: ${card.quizAnswer}`,
     };
+  },
+
+  // Generate cards from text chunk without saving it as a new deck
+  generateTempCardsFromText: async (rawText: string, existingCards: ConceptCard[] = []): Promise<ConceptCard[]> => {
+    console.log('[LLM] generateTempCardsFromText, text length:', rawText.length);
+    const cleanText = rawText
+      .replace(/\r\n/g, '\n')
+      .replace(/\r/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+
+    const paragraphs = pdfService.chunkTextIntoWindows(cleanText);
+
+    const cards: ConceptCard[] = [];
+    for (let i = 0; i < paragraphs.length; i++) {
+      const chunk = paragraphs[i];
+      try {
+        console.log(`[LLM] Generating temp card ${i + 1} of ${paragraphs.length}...`);
+        const card = await llmService._generateCardWithLLM(chunk, i);
+        if (card) {
+          // Concept duplication check
+          const normConcept = card.concept.toLowerCase().trim();
+          const isDuplicate = cards.some(c => c.concept.toLowerCase().trim() === normConcept) ||
+                              existingCards.some(c => c.concept.toLowerCase().trim() === normConcept);
+          if (isDuplicate) {
+            console.log(`[LLM] Skipping duplicate temp card concept: "${card.concept}"`);
+          } else {
+            cards.push(card);
+          }
+        }
+      } catch (err) {
+        console.log('[LLM] Error generating temp card:', err);
+      }
+    }
+    return cards;
+  },
+
+  // Progressively OCR and generate more cards from the next batch of PDF page images
+  loadMoreCardsForDeck: async (deckId: string, onCardsAdded?: (newCards: ConceptCard[]) => void): Promise<void> => {
+    const deck = userDecks.find(d => d.id === deckId);
+    if (!deck || !deck.isIncremental || !deck.pendingPageImages || deck.pendingPageImages.length === 0 || deck.isGeneratingMore) {
+      return;
+    }
+
+    deck.isGeneratingMore = true;
+    console.log('[LLM] Progressive loading started for deck:', deck.title);
+
+    try {
+      const BATCH_SIZE = 3;
+      const batchImages = deck.pendingPageImages.slice(0, BATCH_SIZE);
+      const remainingImages = deck.pendingPageImages.slice(BATCH_SIZE);
+
+      const text = await pdfService.ocrPageImages(batchImages);
+      if (text.trim()) {
+        const newCards = await llmService.generateTempCardsFromText(text, deck.cards);
+        if (newCards.length > 0) {
+          deck.cards = [...deck.cards, ...newCards];
+          if (onCardsAdded) {
+            onCardsAdded(newCards);
+          }
+          console.log('[LLM] Appended', newCards.length, 'progressive cards to deck');
+        }
+      }
+
+      deck.pendingPageImages = remainingImages;
+      deck.isIncremental = remainingImages.length > 0;
+    } catch (err) {
+      console.log('[LLM] Progressive card loading failed:', err);
+    } finally {
+      deck.isGeneratingMore = false;
+      await llmService.saveDecks();
+    }
   }
 };

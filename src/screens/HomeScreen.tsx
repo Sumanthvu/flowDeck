@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  SafeAreaView, Animated,
+  SafeAreaView, Animated, ActivityIndicator,
 } from 'react-native';
 import { theme } from '../styles/theme';
 import { authService, User } from '../services/authService';
@@ -18,6 +18,8 @@ export const HomeScreen: React.FC<Props> = ({ onSelectDeck, onGoToImport, onGoTo
   const [user, setUser] = useState<User | null>(null);
   const [decks, setDecks] = useState<Deck[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingStatus, setLoadingStatus] = useState('⚡ Initializing NPU...');
+  const [downloadProgress, setDownloadProgress] = useState(0);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(30)).current;
 
@@ -25,7 +27,10 @@ export const HomeScreen: React.FC<Props> = ({ onSelectDeck, onGoToImport, onGoTo
     const load = async () => {
       const u = await authService.getUser();
       setUser(u);
-      await llmService.loadModel();
+      await llmService.loadModel((progress, status) => {
+        setLoadingStatus(status);
+        setDownloadProgress(progress);
+      });
       const d = await llmService.getDecks();
       setDecks(d);
       setLoading(false);
@@ -70,7 +75,13 @@ export const HomeScreen: React.FC<Props> = ({ onSelectDeck, onGoToImport, onGoTo
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
-        <Text style={styles.loadingText}>⚡ Initializing NPU...</Text>
+        <ActivityIndicator size="large" color={theme.colors.primary} style={{ marginBottom: 16 }} />
+        <Text style={styles.loadingText}>{loadingStatus}</Text>
+        {downloadProgress > 0 && downloadProgress < 1 && (
+          <View style={styles.downloadBarWrap}>
+            <View style={[styles.downloadBarFill, { width: `${downloadProgress * 100}%` }]} />
+          </View>
+        )}
       </View>
     );
   }
@@ -146,7 +157,15 @@ export const HomeScreen: React.FC<Props> = ({ onSelectDeck, onGoToImport, onGoTo
           {/* Recent Decks */}
           {decks.length > 0 && (
             <View>
-              <Text style={styles.sectionTitle}>Your Decks</Text>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <Text style={styles.sectionTitle}>Your Decks</Text>
+                <TouchableOpacity onPress={async () => {
+                  await llmService.clearAllDecks();
+                  setDecks([]);
+                }}>
+                  <Text style={{ color: theme.colors.danger, fontSize: 13, fontWeight: '700' }}>🗑️ Clear All</Text>
+                </TouchableOpacity>
+              </View>
               {decks.slice(0, 3).map(deck => {
                 const mastered = deck.cards.filter(c => c.isMastered).length;
                 const pct = deck.cards.length > 0 ? Math.round((mastered / deck.cards.length) * 100) : 0;
@@ -265,4 +284,17 @@ const styles = StyleSheet.create({
   emptyIcon: { fontSize: 40, marginBottom: 12 },
   emptyTitle: { color: theme.colors.textPrimary, fontSize: 18, fontWeight: '800', marginBottom: 6 },
   emptySub: { color: theme.colors.textSecondary, fontSize: 14 },
+  downloadBarWrap: {
+    width: '80%',
+    height: 8,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderRadius: 4,
+    marginTop: 16,
+    overflow: 'hidden',
+  },
+  downloadBarFill: {
+    height: '100%',
+    backgroundColor: theme.colors.primary,
+    borderRadius: 4,
+  },
 });

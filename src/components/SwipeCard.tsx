@@ -1,10 +1,20 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   StyleSheet, View, Text, Dimensions,
   Animated, PanResponder, TouchableOpacity,
+  ActivityIndicator,
 } from 'react-native';
+import Tts from 'react-native-tts';
 import { theme } from '../styles/theme';
 import { ConceptCard } from '../services/llmService';
+
+// Initialize Text-To-Speech defaults
+try {
+  Tts.setDefaultLanguage('en-US');
+  Tts.setDefaultRate(0.5);
+} catch (err) {
+  console.log('[TTS] Initialization warning:', err);
+}
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const SWIPE_THRESHOLD = SCREEN_WIDTH * 0.35;
@@ -12,17 +22,36 @@ const SWIPE_THRESHOLD = SCREEN_WIDTH * 0.35;
 interface SwipeCardProps {
   card: ConceptCard;
   isTop: boolean;
+  isLoading?: boolean;
   onSwipeLeft: () => void;
   onSwipeRight: () => void;
   onVoiceLoop: () => void;
 }
 
 export const SwipeCard: React.FC<SwipeCardProps> = ({
-  card, isTop, onSwipeLeft, onSwipeRight, onVoiceLoop,
+  card, isTop, isLoading = false, onSwipeLeft, onSwipeRight, onVoiceLoop,
 }) => {
   const [isFlipped, setIsFlipped] = useState(false);
   const position = useRef(new Animated.ValueXY()).current;
   const flipAnim = useRef(new Animated.Value(0)).current;
+
+  // Stop any active TTS when card ID changes or component unmounts
+  useEffect(() => {
+    return () => {
+      try {
+        Tts.stop();
+      } catch (err) {}
+    };
+  }, [card.id]);
+
+  const handleSpeak = (text: string) => {
+    try {
+      Tts.stop();
+      Tts.speak(text);
+    } catch (err) {
+      console.log('[TTS] Error speaking:', err);
+    }
+  };
 
   const rotate = position.x.interpolate({
     inputRange: [-SCREEN_WIDTH / 2, 0, SCREEN_WIDTH / 2],
@@ -60,19 +89,21 @@ export const SwipeCard: React.FC<SwipeCardProps> = ({
 
   const panResponder = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponder: () => isTop,
-      onMoveShouldSetPanResponder: (_, gs) => isTop && Math.abs(gs.dx) > 5,
+      onStartShouldSetPanResponder: () => isTop && !isLoading,
+      onMoveShouldSetPanResponder: (_, gs) => isTop && !isLoading && Math.abs(gs.dx) > 5,
       onPanResponderMove: (_, gs) => {
         position.setValue({ x: gs.dx, y: gs.dy * 0.2 });
       },
       onPanResponderRelease: (_, gs) => {
         if (gs.vx < -0.5 || gs.dx < -SWIPE_THRESHOLD) {
-          Animated.timing(position, {
-            toValue: { x: -SCREEN_WIDTH * 1.5, y: gs.dy },
-            duration: 250,
+          // Swipe Left (Simplify) -> Spring back to center instead of flying off-screen!
+          Animated.spring(position, {
+            toValue: { x: 0, y: 0 },
+            friction: 5,
             useNativeDriver: true,
-          }).start(() => { position.setValue({ x: 0, y: 0 }); onSwipeLeft(); });
+          }).start(() => { onSwipeLeft(); });
         } else if (gs.vx > 0.5 || gs.dx > SWIPE_THRESHOLD) {
+          // Swipe Right (Mastered) -> Animate off-screen
           Animated.timing(position, {
             toValue: { x: SCREEN_WIDTH * 1.5, y: gs.dy },
             duration: 250,
@@ -118,10 +149,19 @@ export const SwipeCard: React.FC<SwipeCardProps> = ({
         <TouchableOpacity style={styles.faceInner} onPress={handleFlip} activeOpacity={1}>
           <View style={styles.faceHeader}>
             <Text style={styles.conceptTitle}>{card.concept}</Text>
-            <Text style={styles.flipHint}>Tap to flip</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <TouchableOpacity onPress={(e) => { e.stopPropagation(); handleSpeak(card.explanation); }} style={{ padding: 4 }}>
+                <Text style={{ fontSize: 16 }}>🔊</Text>
+              </TouchableOpacity>
+              <Text style={styles.flipHint}>Tap to flip</Text>
+            </View>
           </View>
           <View style={styles.faceBody}>
-            <Text style={styles.explanationText}>{card.explanation}</Text>
+            {isLoading ? (
+              <ActivityIndicator size="large" color={theme.colors.primary} />
+            ) : (
+              <Text style={styles.explanationText}>{card.explanation}</Text>
+            )}
           </View>
           <View style={styles.faceFooter}>
             <Text style={styles.instructionText}>← Simplify   |   Got it! →</Text>
@@ -140,7 +180,12 @@ export const SwipeCard: React.FC<SwipeCardProps> = ({
         <TouchableOpacity style={styles.faceInner} onPress={handleFlip} activeOpacity={1}>
           <View style={styles.faceHeader}>
             <Text style={[styles.conceptTitle, { color: theme.colors.accent }]}>Recall Challenge</Text>
-            <Text style={styles.flipHint}>Tap to flip</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <TouchableOpacity onPress={(e) => { e.stopPropagation(); handleSpeak(`Question: ${card.quizQuestion}. Answer: ${card.quizAnswer}`); }} style={{ padding: 4 }}>
+                <Text style={{ fontSize: 16 }}>🔊</Text>
+              </TouchableOpacity>
+              <Text style={styles.flipHint}>Tap to flip</Text>
+            </View>
           </View>
           <View style={styles.faceBody}>
             <Text style={styles.quizLabel}>QUESTION:</Text>

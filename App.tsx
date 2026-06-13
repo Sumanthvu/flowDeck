@@ -15,7 +15,7 @@ import { theme } from "./src/styles/theme";
 type AppView =
   | { type: "auth" }
   | { type: "main"; tab: MainTab }
-  | { type: "swipe"; deck: Deck }
+  | { type: "swipe"; deck: Deck; initialIndex?: number }
   | { type: "voice"; deck: Deck; cardIndex: number };
 
 export default function App() {
@@ -33,9 +33,9 @@ export default function App() {
   const handleAuth = () => setView({ type: "main", tab: "home" });
   const handleLogout = () => { setActiveTab("home"); setView({ type: "auth" }); };
 
-  const handleSelectDeck = (deck: Deck) => setView({ type: "swipe", deck });
+  const handleSelectDeck = (deck: Deck) => setView({ type: "swipe", deck, initialIndex: 0 });
   const handleDeckCreated = (deck: Deck) => {
-    llmService.getDecks().then(() => setView({ type: "swipe", deck }));
+    llmService.getDecks().then(() => setView({ type: "swipe", deck, initialIndex: 0 }));
   };
   const handleVoiceChallenge = (deck: Deck, cardIndex: number) => setView({ type: "voice", deck, cardIndex });
   const handleBackToMain = () => { setView({ type: "main", tab: activeTab }); };
@@ -61,6 +61,7 @@ export default function App() {
     return (
       <SwipeScreen
         deck={view.deck}
+        initialIndex={view.initialIndex || 0}
         onBack={handleBackToMain}
         onVoiceChallenge={(cardIndex) => handleVoiceChallenge(view.deck, cardIndex)}
       />
@@ -72,11 +73,11 @@ export default function App() {
     return (
       <VoiceScreen
         card={activeCard}
-        onGoBack={handleBackToMain}
+        onGoBack={() => setView({ type: "swipe", deck: view.deck, initialIndex: view.cardIndex })}
         onFeedbackComplete={(score) => {
           activeCard.scoreTransfer = score;
           if (score >= 80) activeCard.isMastered = true;
-          handleBackToMain();
+          setView({ type: "swipe", deck: view.deck, initialIndex: view.cardIndex });
         }}
       />
     );

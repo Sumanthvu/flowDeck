@@ -21,6 +21,8 @@ interface DashboardScreenProps {
 export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSelectDeck }) => {
   const [decks, setDecks] = useState<Deck[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadingStatus, setLoadingStatus] = useState('Initializing On-Device NPU Environment...');
+  const [downloadProgress, setDownloadProgress] = useState(0);
   const [customTitle, setCustomTitle] = useState('');
   const [customText, setCustomText] = useState('');
   const [isProcessingDoc, setIsProcessingDoc] = useState(false);
@@ -28,7 +30,10 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSelectDeck }
   // Load decks on mount
   useEffect(() => {
     const loadInitialData = async () => {
-      await llmService.loadModel();
+      await llmService.loadModel((progress, status) => {
+        setLoadingStatus(status);
+        setDownloadProgress(progress);
+      });
       const loadedDecks = await llmService.getDecks();
       setDecks(loadedDecks);
       setIsLoading(false);
@@ -87,8 +92,13 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({ onSelectDeck }
   if (isLoading) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color={theme.colors.primary} />
-        <Text style={styles.loadingText}>Initializing On-Device NPU Environment...</Text>
+        <ActivityIndicator size="large" color={theme.colors.primary} style={{ marginBottom: 16 }} />
+        <Text style={styles.loadingText}>{loadingStatus}</Text>
+        {downloadProgress > 0 && downloadProgress < 1 && (
+          <View style={styles.downloadBarWrap}>
+            <View style={[styles.downloadBarFill, { width: `${downloadProgress * 100}%` }]} />
+          </View>
+        )}
       </View>
     );
   }
@@ -357,5 +367,18 @@ const styles = StyleSheet.create({
     color: theme.colors.textPrimary,
     fontSize: 14,
     fontWeight: 'bold',
+  },
+  downloadBarWrap: {
+    width: '80%',
+    height: 8,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderRadius: 4,
+    marginTop: 16,
+    overflow: 'hidden',
+  },
+  downloadBarFill: {
+    height: '100%',
+    backgroundColor: theme.colors.primary,
+    borderRadius: 4,
   },
 });

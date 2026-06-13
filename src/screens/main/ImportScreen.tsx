@@ -6,7 +6,7 @@ import {
 import { pick, types, errorCodes, isErrorWithCode } from '@react-native-documents/picker';
 import { theme } from '../../styles/theme';
 import { llmService, Deck } from '../../services/llmService';
-import { extractTextFromPdf } from '../../services/pdfService';
+import { convertPdfToImages, ocrPageImages } from '../../services/pdfService';
 
 interface Props {
   onDeckCreated: (deck: Deck) => void;
@@ -30,6 +30,7 @@ export const ImportScreen: React.FC<Props> = ({ onDeckCreated }) => {
   const [pdfName, setPdfName] = useState('');
   const [pdfTitle, setPdfTitle] = useState('');
   const [pdfChunks, setPdfChunks] = useState<string[]>([]);
+  const [pdfPageImages, setPdfPageImages] = useState<string[]>([]);
   const [pdfPageCount, setPdfPageCount] = useState(0);
   const [pdfError, setPdfError] = useState('');
   const [pdfDeck, setPdfDeck] = useState<Deck | null>(null);
@@ -60,27 +61,40 @@ export const ImportScreen: React.FC<Props> = ({ onDeckCreated }) => {
     setGeneratedDeck(null); setTitle(''); setBody(''); setPreview([]);
   };
 
-  // ── PDF tab handlers ────────────────────────────────────────────────
   const handlePickPdf = async () => {
     try {
       const [result] = await pick({ type: [types.pdf] });
       const name = result.name ?? 'Document';
+      const potentialTitle = name.replace(/\.pdf$/i, '');
+
+      // Check if a deck with this title already exists
+      const existingDecks = await llmService.getDecks();
+      const exists = existingDecks.some(d => d.title.toLowerCase() === potentialTitle.toLowerCase());
+      if (exists) {
+        Alert.alert(
+          'Deck Already Exists',
+          `A deck named "${potentialTitle}" has already been imported. Please choose another PDF or delete the existing deck first.`
+        );
+        return;
+      }
+
       setPdfName(name);
-      setPdfTitle(name.replace(/\.pdf$/i, ''));
+      setPdfTitle(potentialTitle);
       setPdfState('extracting');
       setPdfError('');
       setPdfDeck(null);
 
-      const { chunks, pageCount } = await extractTextFromPdf(result.uri);
+      // Convert PDF to images instantly
+      const images = await convertPdfToImages(result.uri);
 
-      if (chunks.length === 0) {
-        setPdfError('No readable text found in this PDF. It may be a scanned image PDF — try copying the text and using the Paste Text tab instead.');
+      if (images.length === 0) {
+        setPdfError('Failed to convert PDF pages to images.');
         setPdfState('error');
         return;
       }
 
-      setPdfChunks(chunks);
-      setPdfPageCount(pageCount);
+      setPdfPageImages(images);
+      setPdfPageCount(images.length);
       setPdfState('ready');
     } catch (e: any) {
       if (isErrorWithCode(e) && e.code === errorCodes.OPERATION_CANCELED) {
@@ -93,12 +107,44 @@ export const ImportScreen: React.FC<Props> = ({ onDeckCreated }) => {
   };
 
   const handleGenerateFromPdf = async () => {
-    if (pdfChunks.length === 0) return;
+    if (pdfPageImages.length === 0) return;
+
+    const titleToCheck = (pdfTitle || pdfName).trim();
+    const existingDecks = await llmService.getDecks();
+    const exists = existingDecks.some(d => d.title.toLowerCase() === titleToCheck.toLowerCase());
+    if (exists) {
+      Alert.alert(
+        'Deck Already Exists',
+        `A deck named "${titleToCheck}" already exists. Please rename your deck before generating.`
+      );
+      return;
+    }
+
     setGeneratingPdf(true);
     try {
-      const combinedText = pdfChunks.join('\n\n');
-      const deck = await llmService.generateCardsFromText(pdfTitle || pdfName, combinedText);
+      // Process first 3 pages initially
+      const firstBatch = pdfPageImages.slice(0, 3);
+      const remainingImages = pdfPageImages.slice(3);
+
+      console.log('[ImportScreen] Extracting text from first batch of pages...');
+      const text = await ocrPageImages(firstBatch);
+
+      if (!text.trim()) {
+        throw new Error('No readable text found in the first pages of this PDF.');
+      }
+
+      console.log('[ImportScreen] Generating initial flashcards...');
+      const deck = await llmService.generateCardsFromText(pdfTitle || pdfName, text);
+      
+      // Update incremental properties
+      deck.pendingPageImages = remainingImages;
+      deck.isIncremental = remainingImages.length > 0;
+
+      // Persist the progressive generation progress
+      await llmService.saveDecks();
+
       setPdfDeck(deck);
+      onDeckCreated(deck);
     } catch (e: any) {
       Alert.alert('Error', e.message || 'Failed to generate cards from PDF');
     } finally {
@@ -109,6 +155,7 @@ export const ImportScreen: React.FC<Props> = ({ onDeckCreated }) => {
   const resetPdf = () => {
     setPdfState('idle'); setPdfName(''); setPdfTitle('');
     setPdfChunks([]); setPdfPageCount(0); setPdfError(''); setPdfDeck(null);
+    setPdfPageImages([]);
   };
 
   // ── Render ──────────────────────────────────────────────────────────
@@ -268,7 +315,7 @@ export const ImportScreen: React.FC<Props> = ({ onDeckCreated }) => {
                   <View style={{ flex: 1 }}>
                     <Text style={styles.pdfSuccessName} numberOfLines={1}>{pdfName}</Text>
                     <Text style={styles.pdfSuccessMeta}>
-                      ~{pdfPageCount} page{pdfPageCount !== 1 ? 's' : ''} · {pdfChunks.length} text chunks detected
+                      ~{pdfPageCount} page{pdfPageCount !== 1 ? 's' : ''} detected
                     </Text>
                   </View>
                   <TouchableOpacity onPress={resetPdf} style={styles.clearBtn}>
@@ -285,23 +332,22 @@ export const ImportScreen: React.FC<Props> = ({ onDeckCreated }) => {
                   onChangeText={setPdfTitle}
                 />
 
-                {/* Preview first 3 chunks */}
-                <Text style={styles.previewTitle}>Content Preview</Text>
-                {pdfChunks.slice(0, 3).map((chunk, i) => (
-                  <View key={i} style={styles.chunkCard}>
-                    <View style={styles.chunkNum}><Text style={styles.chunkNumText}>{i + 1}</Text></View>
-                    <Text style={styles.chunkText} numberOfLines={3}>{chunk}</Text>
-                  </View>
-                ))}
-                {pdfChunks.length > 3 && (
-                  <Text style={styles.moreChunks}>+{pdfChunks.length - 3} more chunks</Text>
-                )}
+                {/* Progressive Flow Description */}
+                <View style={styles.progressiveInfoCard}>
+                  <Text style={styles.progressiveInfoTitle}>🚀 Progressive Flashcard Flow</Text>
+                  <Text style={styles.progressiveInfoBody}>
+                    To save time and resources, FlowDeck will instantly initialize this deck by reading the first <Text style={{ fontWeight: 'bold', color: theme.colors.textPrimary }}>3 pages</Text> of your PDF.
+                  </Text>
+                  <Text style={styles.progressiveInfoBody}>
+                    As you study, our AI engine will automatically scan and generate flashcards for the remaining pages in the background.
+                  </Text>
+                </View>
 
                 {generatingPdf ? (
                   <View style={styles.processingCard}>
                     <ActivityIndicator color={theme.colors.primary} size="large" />
                     <Text style={styles.processingText}>⚡ Generating flashcards from PDF...</Text>
-                    <Text style={styles.processingSubText}>Creating up to {pdfChunks.length} cards</Text>
+                    <Text style={styles.processingSubText}>Processing first 3 pages...</Text>
                   </View>
                 ) : (
                   <TouchableOpacity style={styles.atomizeBtn} onPress={handleGenerateFromPdf}>
@@ -446,4 +492,25 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24, paddingVertical: 10,
   },
   retryBtnText: { color: theme.colors.danger, fontWeight: '700', fontSize: 14 },
+  progressiveInfoCard: {
+    backgroundColor: theme.colors.background,
+    borderRadius: theme.borderRadius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.cardBorder,
+    padding: 12,
+    marginBottom: 16,
+    marginTop: 8,
+  },
+  progressiveInfoTitle: {
+    color: theme.colors.primary,
+    fontSize: 13,
+    fontWeight: '800',
+    marginBottom: 6,
+  },
+  progressiveInfoBody: {
+    color: theme.colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 18,
+    marginBottom: 6,
+  },
 });
