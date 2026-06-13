@@ -120,27 +120,52 @@ export interface PdfReadResult {
 }
 
 export async function extractTextFromPdf(fileUri: string): Promise<PdfReadResult> {
-  // Normalise URI: react-native-document-picker gives content:// or file:// URIs
   let path = fileUri;
 
-  // On Android, copy content:// URI to a temp file first so we can read bytes
+  console.log('[PDF] Input URI:', fileUri);
+
+  // Handle content:// URIs (from document picker)
   if (fileUri.startsWith('content://')) {
-    const dest = `${RNBlobUtil.fs.dirs.CacheDir}/flowdeck_import_${Date.now()}.pdf`;
-    await RNBlobUtil.MediaCollection.copyToInternal(fileUri, dest);
-    path = dest;
+    try {
+      // Copy to cache dir
+      const dest = `${RNBlobUtil.fs.dirs.CacheDir}/flowdeck_import_${Date.now()}.pdf`;
+      await RNBlobUtil.fs.cp(fileUri, dest);
+      path = dest;
+      console.log('[PDF] Copied to:', path);
+    } catch (err) {
+      console.error('[PDF] Error copying file:', err);
+      throw new Error(`Failed to copy PDF: ${err}`);
+    }
   } else if (fileUri.startsWith('file://')) {
     path = fileUri.replace('file://', '');
   }
 
-  // Read the PDF file as a latin1 string (preserves raw byte values)
-  const raw: string = await RNBlobUtil.fs.readFile(path, 'ascii');
+  try {
+    // Read the PDF file as utf8
+    const rawContent = await RNBlobUtil.fs.readFile(path, 'utf8');
 
-  const text = extractTextFromPdfBinary(raw);
-  const chunks = chunkText(text);
+    // Try to extract text from the raw content
+    const text = extractTextFromPdfBinary(rawContent);
+    let chunks = chunkText(text);
 
-  // Estimate page count from /Page objects in PDF metadata
-  const pageMatches = raw.match(/\/Type\s*\/Page[^s]/g);
-  const pageCount = pageMatches ? pageMatches.length : 1;
+    // If no chunks from binary parsing, use raw content directly
+    if (chunks.length === 0) {
+      chunks = chunkText(rawContent);
+    }
 
-  return { text, chunks, pageCount };
+    // Estimate page count from /Page objects in PDF metadata
+    const pageMatches = rawContent.match(/\/Type\s*\/Page[^s]/g);
+    const pageCount = pageMatches ? pageMatches.length : 1;
+
+    console.log('[PDF] Extracted chunks:', chunks.length, 'pages:', pageCount);
+
+    if (chunks.length === 0) {
+      throw new Error('No readable text found in PDF');
+    }
+
+    return { text, chunks, pageCount };
+  } catch (err) {
+    console.error('[PDF] Error reading PDF:', err);
+    throw new Error(`Failed to read PDF: ${err}`);
+  }
 }

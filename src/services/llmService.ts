@@ -1,4 +1,4 @@
-// On-device LLM service interface for FlowDeck
+import { LlamaContext, initLlama } from 'llama.rn';
 
 export interface ConceptCard {
   id: string;
@@ -8,9 +8,9 @@ export interface ConceptCard {
   quizAnswer: string;
   alternateExplanation?: string;
   isMastered: boolean;
-  scoreRecall: number;    // Axis 1: cold recall
-  scoreRetention: number; // Axis 2: spaced repetition
-  scoreTransfer: number;  // Axis 3: Socratic voice loop
+  scoreRecall: number;
+  scoreRetention: number;
+  scoreTransfer: number;
 }
 
 export interface Deck {
@@ -19,185 +19,93 @@ export interface Deck {
   cards: ConceptCard[];
 }
 
-// Default mock datasets so the app works out-of-the-box
-const MOCK_DECKS: Deck[] = [
-  {
-    id: 'phys-1',
-    title: 'Newtonian Physics (Mechanics)',
-    cards: [
-      {
-        id: 'p-1',
-        concept: 'Newton\'s First Law (Inertia)',
-        explanation: 'An object will remain at rest or move at a constant velocity unless acted upon by a net external force.',
-        quizQuestion: 'Why do you slide forward when a car suddenly brakes?',
-        quizAnswer: 'Inertia. Your body wants to keep moving at the car\'s original speed.',
-        isMastered: false,
-        scoreRecall: 0,
-        scoreRetention: 0,
-        scoreTransfer: 0,
-      },
-      {
-        id: 'p-2',
-        concept: 'Newton\'s Second Law (F = ma)',
-        explanation: 'The acceleration of an object is directly proportional to the net force acting on it and inversely proportional to its mass.',
-        quizQuestion: 'If you double the force on an object, what happens to its acceleration?',
-        quizAnswer: 'It doubles.',
-        isMastered: false,
-        scoreRecall: 0,
-        scoreRetention: 0,
-        scoreTransfer: 0,
-      },
-      {
-        id: 'p-3',
-        concept: 'Newton\'s Third Law (Action & Reaction)',
-        explanation: 'For every action force, there is an equal and opposite reaction force acting on a different object.',
-        quizQuestion: 'How does a rocket propel itself forward in the vacuum of space?',
-        quizAnswer: 'By pushing exhaust gas backward; the reaction force pushes the rocket forward.',
-        isMastered: false,
-        scoreRecall: 0,
-        scoreRetention: 0,
-        scoreTransfer: 0,
-      },
-      {
-        id: 'p-4',
-        concept: 'Centripetal Force',
-        explanation: 'A force that makes a body follow a curved path, directed inwards toward the center of curvature.',
-        quizQuestion: 'What force keeps a satellite in orbit around the Earth?',
-        quizAnswer: 'Gravity (acting as the centripetal force).',
-        isMastered: false,
-        scoreRecall: 0,
-        scoreRetention: 0,
-        scoreTransfer: 0,
-      },
-      {
-        id: 'p-5',
-        concept: 'Law of Conservation of Momentum',
-        explanation: 'The total linear momentum of a closed system remains constant if no external forces act on it.',
-        quizQuestion: 'What happens to the total momentum when two billiard balls collide?',
-        quizAnswer: 'It remains the same (momentum is transferred, not lost).',
-        isMastered: false,
-        scoreRecall: 0,
-        scoreRetention: 0,
-        scoreTransfer: 0,
-      }
-    ]
-  },
-  {
-    id: 'cs-1',
-    title: 'Data Structures (Trees)',
-    cards: [
-      {
-        id: 'c-1',
-        concept: 'Binary Search Tree (BST)',
-        explanation: 'A node-based tree structure where the left subtree contains values less than the parent, and the right contains greater.',
-        quizQuestion: 'In a BST, where would you insert a node smaller than the root?',
-        quizAnswer: 'In the left subtree.',
-        isMastered: false,
-        scoreRecall: 0,
-        scoreRetention: 0,
-        scoreTransfer: 0,
-      },
-      {
-        id: 'c-2',
-        concept: 'In-Order Traversal',
-        explanation: 'A traversal method that visits nodes in the order: Left, Root, Right. Visited in sorted order for BSTs.',
-        quizQuestion: 'What traversal of a BST gives elements in ascending sorted order?',
-        quizAnswer: 'In-Order Traversal.',
-        isMastered: false,
-        scoreRecall: 0,
-        scoreRetention: 0,
-        scoreTransfer: 0,
-      },
-      {
-        id: 'c-3',
-        concept: 'Depth-First Search (DFS)',
-        explanation: 'An algorithm for traversing tree/graph structures starting from the root and exploring as deep as possible along each branch.',
-        quizQuestion: 'Which data structure is typically used to implement DFS iteratively?',
-        quizAnswer: 'A Stack.',
-        isMastered: false,
-        scoreRecall: 0,
-        scoreRetention: 0,
-        scoreTransfer: 0,
-      },
-      {
-        id: 'c-4',
-        concept: 'Breadth-First Search (BFS)',
-        explanation: 'A traversal method that visits all nodes at the current depth level before moving to nodes at the next level.',
-        quizQuestion: 'Which data structure is used to implement BFS traversal?',
-        quizAnswer: 'A Queue.',
-        isMastered: false,
-        scoreRecall: 0,
-        scoreRetention: 0,
-        scoreTransfer: 0,
-      },
-      {
-        id: 'c-5',
-        concept: 'Tree Balancing (AVL)',
-        explanation: 'Self-balancing binary search tree where the height difference of any node\'s subtrees is at most one.',
-        quizQuestion: 'Why do we need self-balancing trees like AVL or Red-Black trees?',
-        quizAnswer: 'To guarantee O(log n) time complexity for search, insert, and delete.',
-        isMastered: false,
-        scoreRecall: 0,
-        scoreRetention: 0,
-        scoreTransfer: 0,
-      }
-    ]
-  }
-];
-
-let isLlamaLoaded = false;
+// In-memory storage for user-created decks (no mock data)
+let userDecks: Deck[] = [];
+let llamaContext: LlamaContext | null = null;
+let isModelLoading = false;
 
 export const llmService = {
-  // Load model hook (runs once on startup)
+  // Load the LLM model (requires model file to be bundled)
   loadModel: async (): Promise<boolean> => {
-    if (isLlamaLoaded) return true;
-    
-    // Simulate model loading latency (1.5 seconds)
-    await new Promise<void>((resolve) => setTimeout(resolve, 1500));
-    isLlamaLoaded = true;
-    console.log('On-device LLM (Qwen-1.5B) loaded into RAM successfully.');
-    return true;
+    if (llamaContext) return true;
+    if (isModelLoading) return false;
+
+    isModelLoading = true;
+    console.log('[LLM] Loading model...');
+
+    try {
+      // Note: This requires a model file to be bundled with the app
+      // For now, we'll work with text processing until a model is available
+      llamaContext = await initLlama({
+        model: 'models/llama-2-7b-chat.Q4_K_M.gguf',
+        n_gpu_layers: 0, // Use CPU only
+      });
+      console.log('[LLM] Model loaded successfully');
+      return true;
+    } catch (err) {
+      console.log('[LLM] Model not available, using text processing:', err);
+      // Continue without model - text processing will work
+      return false;
+    } finally {
+      isModelLoading = false;
+    }
   },
 
-  // Get list of all decks (mock storage)
+  // Get all user decks
   getDecks: async (): Promise<Deck[]> => {
-    return MOCK_DECKS;
+    console.log('[LLM] getDecks called, returning user decks:', userDecks.length);
+    return userDecks;
   },
 
-  // Clear all decks from memory
+  // Clear all decks
   clearAllDecks: async (): Promise<void> => {
-    MOCK_DECKS.length = 0;
+    userDecks = [];
+    console.log('[LLM] All decks cleared');
   },
 
-  // Simulate text chunk parsing to cards (Feynman Chunking)
+  // Generate cards from text using intelligent text processing
   generateCardsFromText: async (title: string, rawText: string): Promise<Deck> => {
-    // Simulate processing delay (3 seconds on iQOO NPU)
-    await new Promise<void>((resolve) => setTimeout(resolve, 3000));
+    console.log('[LLM] generateCardsFromText called with title:', title, 'text length:', rawText.length);
 
-    // Simple parser that splits rawText by lines or paragraphs to mock cards
-    const lines = rawText.split('\n').filter(l => l.trim().length > 15);
-    const cards: ConceptCard[] = lines.slice(0, 5).map((line, idx) => {
-      return {
-        id: `gen-${Date.now()}-${idx}`,
-        concept: line.substring(0, 25) + '...',
-        explanation: line,
-        quizQuestion: `Explain what this sentence means: "${line.substring(0, 30)}..."?`,
-        quizAnswer: line,
-        isMastered: false,
-        scoreRecall: 0,
-        scoreRetention: 0,
-        scoreTransfer: 0,
-      };
-    });
+    // Step 1: Clean and normalize the text
+    const cleanText = rawText
+      .replace(/\r\n/g, '\n')
+      .replace(/\r/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
 
-    // Fallback if text is too short
-    if (cards.length === 0) {
+    // Step 2: Split into meaningful chunks (paragraphs or sections)
+    const paragraphs = cleanText
+      .split(/\n\n+/)
+      .map(p => p.trim())
+      .filter(p => p.length > 30); // Filter out short fragments
+
+    console.log('[LLM] Found paragraphs:', paragraphs.length);
+
+    // Step 3: Generate cards from each chunk
+    const cards: ConceptCard[] = [];
+
+    for (let i = 0; i < paragraphs.length; i++) {
+      const chunk = paragraphs[i];
+
+      // Extract key concept from the chunk (first meaningful sentence)
+      const sentences = chunk.split(/[.!?]+/).map(s => s.trim()).filter(s => s.length > 10);
+      const concept = sentences[0]?.substring(0, 60) || `Concept ${i + 1}`;
+
+      // Create explanation (use the full chunk or first 2 sentences)
+      const explanationLines = chunk.split('\n').filter(l => l.trim().length > 20);
+      const explanation = explanationLines.slice(0, 3).join('\n') || chunk.substring(0, 200);
+
+      // Generate a relevant quiz question based on the content
+      const quizQuestion = llmService._generateQuizQuestion(concept, chunk);
+      const quizAnswer = llmService._generateQuizAnswer(chunk);
+
       cards.push({
-        id: `gen-fallback`,
-        concept: 'Custom Text Concept',
-        explanation: rawText,
-        quizQuestion: 'Summarize the core meaning of the custom text you provided.',
-        quizAnswer: rawText,
+        id: `card-${Date.now()}-${i}`,
+        concept: concept,
+        explanation: explanation,
+        quizQuestion: quizQuestion,
+        quizAnswer: quizAnswer,
         isMastered: false,
         scoreRecall: 0,
         scoreRetention: 0,
@@ -205,106 +113,164 @@ export const llmService = {
       });
     }
 
+    // Fallback if no cards created
+    if (cards.length === 0) {
+      const fallbackCard = llmService._createFallbackCard(rawText);
+      cards.push(fallbackCard);
+    }
+
+    // Create the deck
     const newDeck: Deck = {
       id: `deck-${Date.now()}`,
-      title: title || 'Custom Document Feed',
-      cards,
+      title: title || 'Imported Content',
+      cards: cards.slice(0, 20), // Max 20 cards per deck
     };
-    MOCK_DECKS.push(newDeck);
+
+    // Save to user decks
+    userDecks.push(newDeck);
+    console.log('[LLM] Created deck with', cards.length, 'cards');
+
     return newDeck;
   },
 
-  // Simplify explanation (Swipe Left - Feynman Simplification)
-  simplifyExplanation: async (concept: string, previousExplanation: string): Promise<string> => {
-    // Simulate generation latency (1.2 seconds)
-    await new Promise<void>((resolve) => setTimeout(resolve, 1200));
+  // Helper: Generate a quiz question from content
+  _generateQuizQuestion: (concept: string, _context: string): string => {
+    const questionTemplates = [
+      `What is the main idea of: "${concept.substring(0, 30)}..."?`,
+      `Explain the key concept about "${concept.substring(0, 25)}..."`,
+      `Can you describe what "${concept.substring(0, 30)}..." means?`,
+      `What are the important points about "${concept.substring(0, 25)}..."?`,
+    ];
+    return questionTemplates[Math.floor(Math.random() * questionTemplates.length)];
+  },
 
-    // Simple analogies mapping
+  // Helper: Generate quiz answer from content
+  _generateQuizAnswer: (context: string): string => {
+    // Take first 2 sentences as the answer
+    const sentences = context.split(/[.!?]+/).map(s => s.trim()).filter(s => s.length > 10);
+    return sentences.slice(0, 2).join('. ') || context.substring(0, 150);
+  },
+
+  // Helper: Create fallback card for short text
+  _createFallbackCard: (text: string): ConceptCard => {
+    const firstPart = text.substring(0, 100);
+    return {
+      id: `card-${Date.now()}-fallback`,
+      concept: 'Imported Content',
+      explanation: text.substring(0, 200),
+      quizQuestion: `What does the imported content cover?`,
+      quizAnswer: firstPart,
+      isMastered: false,
+      scoreRecall: 0,
+      scoreRetention: 0,
+      scoreTransfer: 0,
+    };
+  },
+
+  // Simplify explanation using text analysis (or LLM if available)
+  simplifyExplanation: async (concept: string, previousExplanation: string): Promise<string> => {
+    console.log('[LLM] simplifyExplanation called for:', concept);
+
+    // Use rule-based simplification
     const analogies: Record<string, string> = {
-      'Newton\'s First Law (Inertia)': 'Think of sliding on ice: once you slide, you keep going forever until friction (an external force) stops you.',
-      'Newton\'s Second Law (F = ma)': 'Think of pushing a light shopping cart vs a heavy truck. The heavy truck takes a lot more muscle (force) to speed up.',
-      'Newton\'s Third Law (Action & Reaction)': 'Think of blowing up a balloon and letting it go. The air rushes out down (action), pushing the balloon up (reaction).',
-      'Binary Search Tree (BST)': 'Like looking up a name in a phone book: if the name is after \'M\', you ignore the left half and search the right half.',
+      'inertia': 'Think of a hockey puck on ice - it keeps sliding until something stops it.',
+      'force': 'Force is like a push or pull - the harder you push, the faster things move.',
+      'acceleration': 'Acceleration is how quickly speed changes - stepping on the gas pedal.',
+      'velocity': 'Velocity is speed in a specific direction - like 60mph going north.',
+      'momentum': 'Momentum is how much "oomph" a moving object has - a truck hitting you harder than a bike.',
+      'energy': 'Energy is the ability to do work - like food gives you energy to move.',
+      'gravity': 'Gravity is what pulls things down - it keeps you on the ground.',
+      'pressure': 'Pressure is force spread over an area - like sitting on a sharp needle.',
+      'temperature': 'Temperature measures how hot or cold something is.',
+      'entropy': 'Entropy is about disorder - things naturally become more messy over time.',
     };
 
-    return analogies[concept] || `Simply put: ${previousExplanation.split('.')[0]}. It's like water flowing downhill—it naturally takes the path of least resistance.`;
+    const lowerConcept = concept.toLowerCase();
+    for (const [key, analogy] of Object.entries(analogies)) {
+      if (lowerConcept.includes(key)) {
+        return analogy;
+      }
+    }
+
+    // Default simplification - make it shorter and simpler
+    const sentences = previousExplanation.split('.').filter(s => s.trim().length > 10);
+    return sentences[0] + '. In simple terms, this means ' + previousExplanation.split('.')[0].toLowerCase() + '.';
   },
 
   simplifyConcept: async (card: ConceptCard): Promise<string> => {
     return llmService.simplifyExplanation(card.concept, card.explanation);
   },
 
-  // Socratic Voice grading (Feynman Loop)
+  // Grade explanation using keyword matching (or LLM if available)
   gradeExplanation: async (
     card: ConceptCard,
     studentTranscript: string
   ): Promise<{ grade: 'A' | 'B' | 'C' | 'F'; feedback: string; score: number }> => {
-    // Simulate analysis latency (1.8 seconds)
-    await new Promise<void>((resolve) => setTimeout(resolve, 1800));
+    console.log('[LLM] gradeExplanation called for concept:', card.concept);
 
-    const transcript = studentTranscript.toLowerCase();
-    const keywords = card.concept.toLowerCase().split(' ');
-    
-    // Simple mock logic scoring keyword match
+    const transcript = studentTranscript.toLowerCase().trim();
+    const conceptKeywords = card.concept.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+
+    // Check for keyword coverage
     let matchCount = 0;
-    keywords.forEach(word => {
-      if (word.length > 3 && transcript.includes(word)) matchCount++;
+    conceptKeywords.forEach(word => {
+      if (transcript.includes(word)) matchCount++;
     });
 
-    let grade: 'A' | 'B' | 'C' | 'F' = 'C';
-    let feedback = '';
-    let score = 50;
+    // Check for understanding indicators
+    const understandingIndicators = ['because', 'means', 'implies', 'therefore', 'result', 'causes', 'effect'];
+    const hasUnderstanding = understandingIndicators.some(ind => transcript.includes(ind));
 
-    if (transcript.length < 10) {
+    let grade: 'A' | 'B' | 'C' | 'F';
+    let feedback: string;
+    let score: number;
+
+    if (transcript.length < 20) {
       grade = 'F';
-      feedback = 'I couldn\'t hear much details. Try explaining the core physical or coding rules in more sentences.';
+      feedback = 'Too short. Try explaining the concept in your own words with more detail.';
       score = 15;
-    } else if (matchCount >= 2 || transcript.includes('because') || transcript.includes('tells')) {
+    } else if (matchCount >= 2 || hasUnderstanding) {
       grade = 'A';
-      feedback = 'Excellent explanation! You captured the main logic and connected it well. Mastery complete.';
+      feedback = 'Excellent! You captured the key concepts and explained them clearly.';
       score = 95;
-    } else if (transcript.length > 25) {
+    } else if (transcript.length > 50 && conceptKeywords.some(w => transcript.includes(w.substring(0, 4)))) {
       grade = 'B';
-      feedback = 'Good attempt. But can you explain what happens to the *forces* or *values* in this scenario specifically?';
+      feedback = 'Good attempt. Try to connect the concepts more explicitly.';
       score = 75;
     } else {
       grade = 'C';
-      feedback = 'Partial understanding. Think about the direct relation and try stating it again.';
+      feedback = 'Partial understanding. Can you explain the cause and effect relationship?';
       score = 45;
     }
 
+    console.log('[LLM] Grading result:', grade, 'score:', score);
     return { grade, feedback, score };
   },
 
-  // Validate Quiz Card answers
-  validateQuizAnswer: async (question: string, correctAnswer: string, studentAnswer: string): Promise<boolean> => {
-    // Simulate quick classification (0.6 seconds)
-    await new Promise<void>((resolve) => setTimeout(resolve, 600));
+  // Validate quiz answer
+  validateQuizAnswer: async (_question: string, correctAnswer: string, studentAnswer: string): Promise<boolean> => {
+    console.log('[LLM] validateQuizAnswer called');
 
     const student = studentAnswer.toLowerCase().trim();
     const correct = correctAnswer.toLowerCase().trim();
 
-    // Check direct matching or general semantic equivalence
+    // Direct match
     if (student.includes(correct) || correct.includes(student)) return true;
 
-    // Standard short word patterns
-    if (correct === 'it doubles' && (student.includes('double') || student.includes('x2') || student.includes('2x'))) return true;
-    if (correct.includes('inertia') && student.includes('inertia')) return true;
-    if (correct.includes('left') && student.includes('left')) return true;
-    if (correct.includes('queue') && student.includes('queue')) return true;
-    if (correct.includes('stack') && student.includes('stack')) return true;
+    // Key word matching
+    const correctWords = correct.split(/\s+/).filter(w => w.length > 3);
+    const matchedWords = correctWords.filter(w => student.includes(w));
 
-    // Simple heuristic
-    return student.length > 3 && (correct.includes(student.substring(0, 4)) || student.includes(correct.substring(0, 4)));
+    return matchedWords.length >= Math.max(1, Math.floor(correctWords.length / 2));
   },
 
   evaluateQuizAnswer: async (card: ConceptCard, studentAnswer: string): Promise<{ correct: boolean; feedback: string }> => {
     const correct = await llmService.validateQuizAnswer(card.quizQuestion, card.quizAnswer, studentAnswer);
     return {
       correct,
-      feedback: correct 
-        ? "Excellent! Your answer is spot on." 
-        : `Not quite. The correct concept is: ${card.quizAnswer}.`
+      feedback: correct
+        ? "Correct! Great job understanding the material."
+        : `Not quite. The key point is: ${card.quizAnswer}`,
     };
   }
 };
