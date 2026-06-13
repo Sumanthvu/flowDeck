@@ -150,9 +150,9 @@ export const VoiceScreen: React.FC<VoiceScreenProps> = ({
 
               <TouchableOpacity
                 onPress={() => handleSimulateAnswer('weak')}
-                style={[styles.simBtn, { backgroundColor: `${theme.colors.error}15`, borderColor: theme.colors.error }]}
+                style={[styles.simBtn, { backgroundColor: `${theme.colors.danger}15`, borderColor: theme.colors.danger }]}
               >
-                <Text style={[styles.simBtnText, { color: theme.colors.error }]}>Simulate C-Grade</Text>
+                <Text style={[styles.simBtnText, { color: theme.colors.danger }]}>Simulate C-Grade</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -306,12 +306,12 @@ const styles = StyleSheet.create({
   pulseLine: {
     width: 4,
     height: 25,
-    backgroundColor: theme.colors.error,
+    backgroundColor: theme.colors.danger,
     marginHorizontal: 4,
     borderRadius: 2,
   },
   pulseLineActive: {
-    backgroundColor: theme.colors.error,
+    backgroundColor: theme.colors.danger,
   },
   timerText: {
     color: theme.colors.textPrimary,
@@ -322,13 +322,13 @@ const styles = StyleSheet.create({
   stopButton: {
     backgroundColor: theme.colors.cardBorder,
     borderWidth: 1.5,
-    borderColor: theme.colors.error,
+    borderColor: theme.colors.danger,
     borderRadius: theme.borderRadius.md,
     paddingHorizontal: theme.spacing.md,
     paddingVertical: theme.spacing.sm,
   },
   stopButtonText: {
-    color: theme.colors.error,
+    color: theme.colors.danger,
     fontWeight: 'bold',
     fontSize: 13,
   },
@@ -406,7 +406,7 @@ const styles = StyleSheet.create({
     backgroundColor: `${theme.colors.primary}33`,
   },
   badgeF: {
-    backgroundColor: `${theme.colors.error}33`,
+    backgroundColor: `${theme.colors.danger}33`,
   },
   gradeBadgeText: {
     color: theme.colors.textPrimary,

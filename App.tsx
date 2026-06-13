@@ -1,78 +1,115 @@
-/**
- * FlowDeck: Gen-Z Active Mastery AI Tutor
- */
+import React, { useState, useEffect } from "react";
+import { View, ActivityIndicator, StyleSheet } from "react-native";
+import { AuthNavigator } from "./src/navigation/AuthNavigator";
+import { MainNavigator, MainTab } from "./src/navigation/MainNavigator";
+import { HomeScreen } from "./src/screens/HomeScreen";
+import { DeckListScreen } from "./src/screens/DeckListScreen";
+import { ImportScreen } from "./src/screens/main/ImportScreen";
+import { ProfileScreen } from "./src/screens/main/ProfileScreen";
+import { SwipeScreen } from "./src/screens/SwipeScreen";
+import { VoiceScreen } from "./src/screens/VoiceScreen";
+import { authService } from "./src/services/authService";
+import { llmService, Deck } from "./src/services/llmService";
+import { theme } from "./src/styles/theme";
 
-import React, { useState } from 'react';
-import { View, StyleSheet } from 'react-native';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { DashboardScreen } from './src/screens/DashboardScreen';
-import { SwipeScreen } from './src/screens/SwipeScreen';
-import { VoiceScreen } from './src/screens/VoiceScreen';
-import { Deck, ConceptCard } from './src/services/llmService';
+type AppView =
+  | { type: "auth" }
+  | { type: "main"; tab: MainTab }
+  | { type: "swipe"; deck: Deck }
+  | { type: "voice"; deck: Deck; cardIndex: number };
 
-type ScreenState = 'dashboard' | 'swipe' | 'voice';
+export default function App() {
+  const [view, setView] = useState<AppView>({ type: "auth" });
+  const [checkingAuth, setCheckingAuth] = useState(true);
+  const [activeTab, setActiveTab] = useState<MainTab>("home");
 
-function App() {
-  const [currentScreen, setCurrentScreen] = useState<ScreenState>('dashboard');
-  const [selectedDeck, setSelectedDeck] = useState<Deck | null>(null);
-  const [selectedCard, setSelectedCard] = useState<ConceptCard | null>(null);
-  const [voiceCallback, setVoiceCallback] = useState<((score: number) => void) | null>(null);
+  useEffect(() => {
+    authService.isLoggedIn().then(loggedIn => {
+      if (loggedIn) setView({ type: "main", tab: "home" });
+      setCheckingAuth(false);
+    });
+  }, []);
 
-  const handleSelectDeck = (deck: Deck) => {
-    setSelectedDeck(deck);
-    setCurrentScreen('swipe');
+  const handleAuth = () => setView({ type: "main", tab: "home" });
+  const handleLogout = () => { setActiveTab("home"); setView({ type: "auth" }); };
+
+  const handleSelectDeck = (deck: Deck) => setView({ type: "swipe", deck });
+  const handleDeckCreated = (deck: Deck) => {
+    llmService.getDecks().then(() => setView({ type: "swipe", deck }));
+  };
+  const handleVoiceChallenge = (deck: Deck, cardIndex: number) => setView({ type: "voice", deck, cardIndex });
+  const handleBackToMain = () => { setView({ type: "main", tab: activeTab }); };
+
+  const handleTabChange = (tab: MainTab) => {
+    setActiveTab(tab);
+    setView({ type: "main", tab });
   };
 
-  const handleGoBackToDashboard = () => {
-    setSelectedDeck(null);
-    setCurrentScreen('dashboard');
-  };
+  if (checkingAuth) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color={theme.colors.primary} />
+      </View>
+    );
+  }
 
-  const handleLaunchVoice = (card: ConceptCard, callback: (score: number) => void) => {
-    setSelectedCard(card);
-    setVoiceCallback(() => callback);
-    setCurrentScreen('voice');
-  };
+  if (view.type === "auth") {
+    return <AuthNavigator onAuthenticated={handleAuth} />;
+  }
 
-  const handleVoiceComplete = (score: number) => {
-    if (voiceCallback) {
-      voiceCallback(score);
-    }
-    setCurrentScreen('swipe');
-  };
+  if (view.type === "swipe") {
+    return (
+      <SwipeScreen
+        deck={view.deck}
+        onBack={handleBackToMain}
+        onVoiceChallenge={(cardIndex) => handleVoiceChallenge(view.deck, cardIndex)}
+      />
+    );
+  }
 
-  const handleGoBackToSwipe = () => {
-    setCurrentScreen('swipe');
-  };
+  if (view.type === "voice") {
+    const activeCard = view.deck.cards[view.cardIndex];
+    return (
+      <VoiceScreen
+        card={activeCard}
+        onGoBack={handleBackToMain}
+        onFeedbackComplete={(score) => {
+          activeCard.scoreTransfer = score;
+          if (score >= 80) activeCard.isMastered = true;
+          handleBackToMain();
+        }}
+      />
+    );
+  }
 
   return (
-    <SafeAreaProvider style={styles.container}>
-      {currentScreen === 'dashboard' && (
-        <DashboardScreen onSelectDeck={handleSelectDeck} />
-      )}
-      {currentScreen === 'swipe' && selectedDeck && (
-        <SwipeScreen
-          deck={selectedDeck}
-          onGoBack={handleGoBackToDashboard}
-          onVoiceLaunch={handleLaunchVoice}
+    <MainNavigator currentTab={activeTab} onTabChange={handleTabChange}>
+      {activeTab === "home" && (
+        <HomeScreen
+          onSelectDeck={handleSelectDeck}
+          onGoToImport={() => handleTabChange("import")}
+          onGoToLearn={() => handleTabChange("learn")}
         />
       )}
-      {currentScreen === 'voice' && selectedCard && (
-        <VoiceScreen
-          card={selectedCard}
-          onGoBack={handleGoBackToSwipe}
-          onFeedbackComplete={handleVoiceComplete}
+      {activeTab === "learn" && (
+        <DeckListScreen
+          onSelectDeck={handleSelectDeck}
+          onGoToImport={() => handleTabChange("import")}
         />
       )}
-    </SafeAreaProvider>
+      {activeTab === "import" && (
+        <ImportScreen onDeckCreated={handleDeckCreated} />
+      )}
+      {activeTab === "profile" && (
+        <ProfileScreen onLogout={handleLogout} />
+      )}
+    </MainNavigator>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0B0F19',
+  loadingContainer: {
+    flex: 1, justifyContent: "center", alignItems: "center",
+    backgroundColor: theme.colors.background,
   },
 });
-
-export default App;

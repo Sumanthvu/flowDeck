@@ -1,7 +1,7 @@
 // On-device Whisper speech-to-text service interface for FlowDeck
 
 let isRecording = false;
-let recordTimer: NodeJS.Timeout | null = null;
+let recordTimer: any = null;
 let recordingSeconds = 0;
 
 export const whisperService = {
@@ -37,11 +37,11 @@ export const whisperService = {
 
   // Transcribe local audio to text (offline Whisper)
   transcribeAudio: async (
-    audioPath: string,
+    _audioPath: string,
     concept: string
   ): Promise<string> => {
     // Simulate Whisper model inference latency (1.2 seconds)
-    await new Promise((resolve) => setTimeout(resolve, 1200));
+    await new Promise<void>((resolve) => setTimeout(resolve, 1200));
 
     // Preset transcript answers matching our default mock dataset
     const transcripts: Record<string, string> = {

@@ -1,47 +1,53 @@
-// Theme tokens for FlowDeck
-
+// src/styles/theme.ts — iQOO-inspired premium dark theme
 export const theme = {
   colors: {
-    // Deep premium dark mode backgrounds
-    background: '#0B0F19',       // Dark obsidian
-    cardBackground: '#161F30',   // Translucent slate
-    cardBorder: '#23304A',       // Subtle border
-
-    // Vibrant tailwind-style colors
-    primary: '#6366F1',          // Electric Indigo (Swipe Right / Got It)
-    secondary: '#EC4899',        // Neon Pink (Swipe Left / Explain Again)
-    accent: '#F59E0B',           // Amber Gold (Quiz Gating / SOS)
-    
-    // Status colors
-    success: '#10B981',          // Emerald Green
-    error: '#EF4444',            // Rose Red
-    warning: '#F59E0B',          // Warning amber
-    
-    // Typography colors
-    textPrimary: '#F8FAFC',      // Crisp slate white
-    textSecondary: '#94A3B8',    // Muted slate gray
-    textMuted: '#64748B',        // Subdued slate gray
+    background: '#050810',
+    backgroundAlt: '#080D1A',
+    surface: '#0D1421',
+    surfaceAlt: '#111827',
+    cardBackground: '#0D1421',
+    cardBorder: '#1E2D4A',
+    primary: '#4F8EF7',
+    primaryDark: '#2563EB',
+    primaryGlow: 'rgba(79,142,247,0.25)',
+    accent: '#7C3AED',
+    accentGlow: 'rgba(124,58,237,0.25)',
+    neon: '#00D4FF',
+    neonGlow: 'rgba(0,212,255,0.2)',
+    gradientPrimary: ['#4F8EF7', '#7C3AED'] as string[],
+    success: '#00E676',
+    successBg: 'rgba(0,230,118,0.12)',
+    danger: '#FF4560',
+    dangerBg: 'rgba(255,69,96,0.12)',
+    warning: '#FFB020',
+    textPrimary: '#F0F4FF',
+    textSecondary: '#8892A4',
+    textMuted: '#4A5568',
+    textAccent: '#4F8EF7',
+    tabActive: '#4F8EF7',
+    tabInactive: '#4A5568',
+    tabBackground: '#080D1A',
+    tabBorder: '#1E2D4A',
+    white: '#FFFFFF',
+    black: '#000000',
+    overlay: 'rgba(5,8,16,0.85)',
+    glassBg: 'rgba(13,20,33,0.8)',
+    glassBorder: 'rgba(79,142,247,0.15)',
   },
-  
-  fonts: {
-    // Standard system fonts for high performance
-    regular: 'System',
-    medium: 'System',
-    bold: 'System',
+  spacing: { xs: 4, sm: 8, md: 16, lg: 24, xl: 32, xxl: 48 },
+  borderRadius: { xs: 6, sm: 10, md: 14, lg: 20, xl: 28, full: 999 },
+  typography: {
+    hero: { fontSize: 40, fontWeight: '900' as const, letterSpacing: -1 },
+    h1: { fontSize: 28, fontWeight: '800' as const, letterSpacing: -0.5 },
+    h2: { fontSize: 22, fontWeight: '700' as const },
+    h3: { fontSize: 18, fontWeight: '700' as const },
+    body: { fontSize: 15, fontWeight: '400' as const },
+    bodyBold: { fontSize: 15, fontWeight: '600' as const },
+    caption: { fontSize: 12, fontWeight: '500' as const },
+    label: { fontSize: 11, fontWeight: '600' as const, letterSpacing: 1, textTransform: 'uppercase' as const },
   },
-  
-  spacing: {
-    xs: 4,
-    sm: 8,
-    md: 16,
-    lg: 24,
-    xl: 32,
-  },
-  
-  borderRadius: {
-    sm: 6,
-    md: 12,
-    lg: 20,
-    xl: 30,
+  shadows: {
+    glow: { shadowColor: '#4F8EF7', shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.5, shadowRadius: 12, elevation: 8 },
+    card: { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 4 },
   },
 };

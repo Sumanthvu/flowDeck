@@ -153,7 +153,7 @@ export const llmService = {
     if (isLlamaLoaded) return true;
     
     // Simulate model loading latency (1.5 seconds)
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+    await new Promise<void>((resolve) => setTimeout(resolve, 1500));
     isLlamaLoaded = true;
     console.log('On-device LLM (Qwen-1.5B) loaded into RAM successfully.');
     return true;
@@ -164,10 +164,15 @@ export const llmService = {
     return MOCK_DECKS;
   },
 
+  // Clear all decks from memory
+  clearAllDecks: async (): Promise<void> => {
+    MOCK_DECKS.length = 0;
+  },
+
   // Simulate text chunk parsing to cards (Feynman Chunking)
   generateCardsFromText: async (title: string, rawText: string): Promise<Deck> => {
     // Simulate processing delay (3 seconds on iQOO NPU)
-    await new Promise((resolve) => setTimeout(resolve, 3000));
+    await new Promise<void>((resolve) => setTimeout(resolve, 3000));
 
     // Simple parser that splits rawText by lines or paragraphs to mock cards
     const lines = rawText.split('\n').filter(l => l.trim().length > 15);
@@ -200,17 +205,19 @@ export const llmService = {
       });
     }
 
-    return {
+    const newDeck: Deck = {
       id: `deck-${Date.now()}`,
       title: title || 'Custom Document Feed',
       cards,
     };
+    MOCK_DECKS.push(newDeck);
+    return newDeck;
   },
 
   // Simplify explanation (Swipe Left - Feynman Simplification)
   simplifyExplanation: async (concept: string, previousExplanation: string): Promise<string> => {
     // Simulate generation latency (1.2 seconds)
-    await new Promise((resolve) => setTimeout(resolve, 1200));
+    await new Promise<void>((resolve) => setTimeout(resolve, 1200));
 
     // Simple analogies mapping
     const analogies: Record<string, string> = {
@@ -223,13 +230,17 @@ export const llmService = {
     return analogies[concept] || `Simply put: ${previousExplanation.split('.')[0]}. It's like water flowing downhill—it naturally takes the path of least resistance.`;
   },
 
+  simplifyConcept: async (card: ConceptCard): Promise<string> => {
+    return llmService.simplifyExplanation(card.concept, card.explanation);
+  },
+
   // Socratic Voice grading (Feynman Loop)
   gradeExplanation: async (
     card: ConceptCard,
     studentTranscript: string
   ): Promise<{ grade: 'A' | 'B' | 'C' | 'F'; feedback: string; score: number }> => {
     // Simulate analysis latency (1.8 seconds)
-    await new Promise((resolve) => setTimeout(resolve, 1800));
+    await new Promise<void>((resolve) => setTimeout(resolve, 1800));
 
     const transcript = studentTranscript.toLowerCase();
     const keywords = card.concept.toLowerCase().split(' ');
@@ -268,7 +279,7 @@ export const llmService = {
   // Validate Quiz Card answers
   validateQuizAnswer: async (question: string, correctAnswer: string, studentAnswer: string): Promise<boolean> => {
     // Simulate quick classification (0.6 seconds)
-    await new Promise((resolve) => setTimeout(resolve, 600));
+    await new Promise<void>((resolve) => setTimeout(resolve, 600));
 
     const student = studentAnswer.toLowerCase().trim();
     const correct = correctAnswer.toLowerCase().trim();
@@ -285,5 +296,15 @@ export const llmService = {
 
     // Simple heuristic
     return student.length > 3 && (correct.includes(student.substring(0, 4)) || student.includes(correct.substring(0, 4)));
+  },
+
+  evaluateQuizAnswer: async (card: ConceptCard, studentAnswer: string): Promise<{ correct: boolean; feedback: string }> => {
+    const correct = await llmService.validateQuizAnswer(card.quizQuestion, card.quizAnswer, studentAnswer);
+    return {
+      correct,
+      feedback: correct 
+        ? "Excellent! Your answer is spot on." 
+        : `Not quite. The correct concept is: ${card.quizAnswer}.`
+    };
   }
 };

@@ -1,14 +1,8 @@
-import React, { useState } from 'react';
-import { StyleSheet, View, Text, Dimensions, TouchableWithoutFeedback } from 'react-native';
-import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
-import Animated, {
-  useSharedValue,
-  useAnimatedStyle,
-  withSpring,
-  withTiming,
-  runOnJS,
-  interpolate,
-} from 'react-native-reanimated';
+import React, { useState, useRef } from 'react';
+import {
+  StyleSheet, View, Text, Dimensions,
+  Animated, PanResponder, TouchableOpacity,
+} from 'react-native';
 import { theme } from '../styles/theme';
 import { ConceptCard } from '../services/llmService';
 
@@ -18,172 +12,148 @@ const SWIPE_THRESHOLD = SCREEN_WIDTH * 0.35;
 interface SwipeCardProps {
   card: ConceptCard;
   isTop: boolean;
-  onSwipeLeft: () => void;  // Simplify
-  onSwipeRight: () => void; // Mastered/Got it
-  onVoiceLoop: () => void;  // Go to voice Feynman mode
+  onSwipeLeft: () => void;
+  onSwipeRight: () => void;
+  onVoiceLoop: () => void;
 }
 
 export const SwipeCard: React.FC<SwipeCardProps> = ({
-  card,
-  isTop,
-  onSwipeLeft,
-  onSwipeRight,
-  onVoiceLoop,
+  card, isTop, onSwipeLeft, onSwipeRight, onVoiceLoop,
 }) => {
   const [isFlipped, setIsFlipped] = useState(false);
-  
-  // Animation shared values
-  const translateX = useSharedValue(0);
-  const translateY = useSharedValue(0);
-  const rotateCard = useSharedValue(0); // Card flip rotation: 0 to 180
+  const position = useRef(new Animated.ValueXY()).current;
+  const flipAnim = useRef(new Animated.Value(0)).current;
+
+  const rotate = position.x.interpolate({
+    inputRange: [-SCREEN_WIDTH / 2, 0, SCREEN_WIDTH / 2],
+    outputRange: ['-8deg', '0deg', '8deg'],
+    extrapolate: 'clamp',
+  });
+
+  const gotItOpacity = position.x.interpolate({
+    inputRange: [0, SWIPE_THRESHOLD / 2],
+    outputRange: [0, 1],
+    extrapolate: 'clamp',
+  });
+
+  const simplifyOpacity = position.x.interpolate({
+    inputRange: [-SWIPE_THRESHOLD / 2, 0],
+    outputRange: [1, 0],
+    extrapolate: 'clamp',
+  });
+
+  const frontRotateY = flipAnim.interpolate({
+    inputRange: [0, 180],
+    outputRange: ['0deg', '180deg'],
+  });
+
+  const backRotateY = flipAnim.interpolate({
+    inputRange: [0, 180],
+    outputRange: ['180deg', '360deg'],
+  });
 
   const handleFlip = () => {
+    const toValue = isFlipped ? 0 : 180;
+    Animated.spring(flipAnim, { toValue, friction: 8, useNativeDriver: true }).start();
     setIsFlipped(!isFlipped);
-    rotateCard.value = withSpring(isFlipped ? 0 : 180, { damping: 15 });
   };
 
-  const handleLeftSwipeAction = () => {
-    onSwipeLeft();
-  };
-
-  const handleRightSwipeAction = () => {
-    onSwipeRight();
-  };
-
-  // Configure Gesture Handler Pan
-  const panGesture = Gesture.Pan()
-    .enabled(isTop)
-    .onUpdate((event) => {
-      translateX.value = event.translationX;
-      translateY.value = event.translationY * 0.2; // Resist vertical movement
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => isTop,
+      onMoveShouldSetPanResponder: (_, gs) => isTop && Math.abs(gs.dx) > 5,
+      onPanResponderMove: (_, gs) => {
+        position.setValue({ x: gs.dx, y: gs.dy * 0.2 });
+      },
+      onPanResponderRelease: (_, gs) => {
+        if (gs.vx < -0.5 || gs.dx < -SWIPE_THRESHOLD) {
+          Animated.timing(position, {
+            toValue: { x: -SCREEN_WIDTH * 1.5, y: gs.dy },
+            duration: 250,
+            useNativeDriver: true,
+          }).start(() => { position.setValue({ x: 0, y: 0 }); onSwipeLeft(); });
+        } else if (gs.vx > 0.5 || gs.dx > SWIPE_THRESHOLD) {
+          Animated.timing(position, {
+            toValue: { x: SCREEN_WIDTH * 1.5, y: gs.dy },
+            duration: 250,
+            useNativeDriver: true,
+          }).start(() => { position.setValue({ x: 0, y: 0 }); onSwipeRight(); });
+        } else {
+          Animated.spring(position, {
+            toValue: { x: 0, y: 0 },
+            friction: 5,
+            useNativeDriver: true,
+          }).start();
+        }
+      },
     })
-    .onEnd((event) => {
-      if (event.velocityX < -500 || translateX.value < -SWIPE_THRESHOLD) {
-        // Fly Left (Simplify)
-        translateX.value = withTiming(-SCREEN_WIDTH * 1.5, { duration: 250 }, () => {
-          runOnJS(handleLeftSwipeAction)();
-        });
-      } else if (event.velocityX > 500 || translateX.value > SWIPE_THRESHOLD) {
-        // Fly Right (Got it!)
-        translateX.value = withTiming(SCREEN_WIDTH * 1.5, { duration: 250 }, () => {
-          runOnJS(handleRightSwipeAction)();
-        });
-      } else {
-        // Snap Back to Center
-        translateX.value = withSpring(0, { damping: 15 });
-        translateY.value = withSpring(0, { damping: 15 });
-      }
-    });
-
-  // Animated styles for swiping
-  const swipeStyle = useAnimatedStyle(() => {
-    const rotate = interpolate(
-      translateX.value,
-      [-SCREEN_WIDTH / 2, 0, SCREEN_WIDTH / 2],
-      [-8, 0, 8]
-    );
-
-    return {
-      transform: [
-        { translateX: translateX.value },
-        { translateY: translateY.value },
-        { rotate: `${rotate}deg` },
-      ],
-    };
-  });
-
-  // Front card flip style
-  const frontStyle = useAnimatedStyle(() => {
-    return {
-      transform: [{ rotateY: `${rotateCard.value}deg` }],
-      backfaceVisibility: 'hidden',
-    };
-  });
-
-  // Back card flip style (rotated 180 deg by default)
-  const backStyle = useAnimatedStyle(() => {
-    return {
-      transform: [{ rotateY: `${rotateCard.value - 180}deg` }],
-      backfaceVisibility: 'hidden',
-      position: 'absolute',
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-    };
-  });
-
-  // Badge Opacity animations
-  const gotItBadgeStyle = useAnimatedStyle(() => {
-    const opacity = interpolate(translateX.value, [0, SWIPE_THRESHOLD / 2], [0, 1]);
-    return { opacity };
-  });
-
-  const simplifyBadgeStyle = useAnimatedStyle(() => {
-    const opacity = interpolate(translateX.value, [-SWIPE_THRESHOLD / 2, 0], [1, 0]);
-    return { opacity };
-  });
+  ).current;
 
   return (
-    <GestureHandlerRootView style={styles.cardContainer}>
-      <GestureDetector gesture={panGesture}>
-        <Animated.View style={[styles.card, swipeStyle]}>
-          <TouchableWithoutFeedback onPress={handleFlip}>
-            <View style={styles.cardInner}>
-              {/* FRONT OF THE CARD */}
-              <Animated.View style={[styles.frontCard, frontStyle]}>
-                <View style={styles.header}>
-                  <Text style={styles.conceptTitle}>{card.concept}</Text>
-                  <Text style={styles.cardIndicator}>Tap to flip</Text>
-                </View>
+    <Animated.View
+      style={[
+        styles.cardContainer,
+        { transform: [{ translateX: position.x }, { translateY: position.y }, { rotate }] },
+      ]}
+      {...panResponder.panHandlers}
+    >
+      {/* GOT IT badge */}
+      <Animated.View style={[styles.badge, styles.badgeGotIt, { opacity: gotItOpacity }]}>
+        <Text style={styles.badgeText}>GOT IT!</Text>
+      </Animated.View>
 
-                <View style={styles.body}>
-                  <Text style={styles.explanationText}>{card.explanation}</Text>
-                </View>
+      {/* SIMPLIFY badge */}
+      <Animated.View style={[styles.badge, styles.badgeSimplify, { opacity: simplifyOpacity }]}>
+        <Text style={styles.badgeText}>SIMPLIFY</Text>
+      </Animated.View>
 
-                <View style={styles.footer}>
-                  <Text style={styles.instructionText}>
-                    ← Swipe Left to Simplify   |   Swipe Right to Master →
-                  </Text>
-                </View>
-              </Animated.View>
+      {/* FRONT */}
+      <Animated.View
+        style={[
+          styles.face, styles.front,
+          { transform: [{ rotateY: frontRotateY }] },
+        ]}
+        pointerEvents={isFlipped ? 'none' : 'auto'}
+      >
+        <TouchableOpacity style={styles.faceInner} onPress={handleFlip} activeOpacity={1}>
+          <View style={styles.faceHeader}>
+            <Text style={styles.conceptTitle}>{card.concept}</Text>
+            <Text style={styles.flipHint}>Tap to flip</Text>
+          </View>
+          <View style={styles.faceBody}>
+            <Text style={styles.explanationText}>{card.explanation}</Text>
+          </View>
+          <View style={styles.faceFooter}>
+            <Text style={styles.instructionText}>← Simplify   |   Got it! →</Text>
+          </View>
+        </TouchableOpacity>
+      </Animated.View>
 
-              {/* BACK OF THE CARD */}
-              <Animated.View style={[styles.backCard, backStyle]}>
-                <View style={styles.headerBack}>
-                  <Text style={styles.conceptTitleBack}>Recall Challenge</Text>
-                  <Text style={styles.cardIndicator}>Tap to flip</Text>
-                </View>
-
-                <View style={styles.bodyBack}>
-                  <Text style={styles.quizLabel}>QUESTION:</Text>
-                  <Text style={styles.questionText}>{card.quizQuestion}</Text>
-
-                  <Text style={styles.answerLabel}>ANSWER CONCEPT:</Text>
-                  <Text style={styles.answerText}>{card.quizAnswer}</Text>
-                </View>
-
-                {/* Socratic Feynman voice loop action */}
-                <TouchableWithoutFeedback onPress={onVoiceLoop}>
-                  <View style={styles.voiceButton}>
-                    <Text style={styles.voiceButtonText}>🎙️ Teach Me Back (Feynman Loop)</Text>
-                  </View>
-                </TouchableWithoutFeedback>
-              </Animated.View>
-            </View>
-          </TouchableWithoutFeedback>
-
-          {/* Swipe Badges */}
-          <Animated.View style={[styles.badge, styles.badgeGotIt, gotItBadgeStyle]}>
-            <Text style={styles.badgeText}>GOT IT! (MASTER)</Text>
-          </Animated.View>
-
-          <Animated.View style={[styles.badge, styles.badgeSimplify, simplifyBadgeStyle]}>
-            <Text style={styles.badgeText}>SIMPLIFY (REMIX)</Text>
-          </Animated.View>
-        </Animated.View>
-      </GestureDetector>
-    </GestureHandlerRootView>
+      {/* BACK */}
+      <Animated.View
+        style={[
+          styles.face, styles.back,
+          { transform: [{ rotateY: backRotateY }] },
+        ]}
+        pointerEvents={isFlipped ? 'auto' : 'none'}
+      >
+        <TouchableOpacity style={styles.faceInner} onPress={handleFlip} activeOpacity={1}>
+          <View style={styles.faceHeader}>
+            <Text style={[styles.conceptTitle, { color: theme.colors.accent }]}>Recall Challenge</Text>
+            <Text style={styles.flipHint}>Tap to flip</Text>
+          </View>
+          <View style={styles.faceBody}>
+            <Text style={styles.quizLabel}>QUESTION:</Text>
+            <Text style={styles.questionText}>{card.quizQuestion}</Text>
+            <Text style={styles.answerLabel}>ANSWER:</Text>
+            <Text style={styles.answerText}>{card.quizAnswer}</Text>
+          </View>
+          <TouchableOpacity style={styles.voiceButton} onPress={onVoiceLoop}>
+            <Text style={styles.voiceButtonText}>🎙️ Teach Me Back (Feynman Loop)</Text>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Animated.View>
+    </Animated.View>
   );
 };
 
@@ -191,47 +161,30 @@ const styles = StyleSheet.create({
   cardContainer: {
     width: SCREEN_WIDTH - 32,
     height: SCREEN_HEIGHT * 0.55,
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.3,
-    shadowRadius: 20,
-    elevation: 8,
+    alignSelf: 'center',
   },
-  card: {
+  face: {
+    position: 'absolute',
     width: '100%',
     height: '100%',
     borderRadius: theme.borderRadius.lg,
-    backgroundColor: theme.colors.cardBackground,
     borderWidth: 1.5,
     borderColor: theme.colors.cardBorder,
+    backfaceVisibility: 'hidden',
     overflow: 'hidden',
   },
-  cardInner: {
-    flex: 1,
+  front: {
+    backgroundColor: theme.colors.cardBackground,
   },
-  frontCard: {
-    flex: 1,
-    padding: theme.spacing.lg,
-    justifyContent: 'space-between',
+  back: {
+    backgroundColor: '#1C263A',
   },
-  backCard: {
+  faceInner: {
     flex: 1,
     padding: theme.spacing.lg,
     justifyContent: 'space-between',
-    backgroundColor: '#1C263A', // slightly different color for back
-    borderRadius: theme.borderRadius.lg,
   },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.cardBorder,
-    paddingBottom: theme.spacing.sm,
-  },
-  headerBack: {
+  faceHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
@@ -245,27 +198,22 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     maxWidth: '70%',
   },
-  conceptTitleBack: {
-    color: theme.colors.accent,
-    fontSize: 18,
-    fontWeight: 'bold',
-    maxWidth: '70%',
-  },
-  cardIndicator: {
+  flipHint: {
     color: theme.colors.textMuted,
     fontSize: 11,
     fontWeight: '600',
     textTransform: 'uppercase',
   },
-  body: {
+  faceBody: {
     flex: 1,
     justifyContent: 'center',
     paddingVertical: theme.spacing.md,
   },
-  bodyBack: {
-    flex: 1,
-    justifyContent: 'center',
-    paddingVertical: theme.spacing.md,
+  faceFooter: {
+    alignItems: 'center',
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.cardBorder,
+    paddingTop: theme.spacing.sm,
   },
   explanationText: {
     color: theme.colors.textPrimary,
@@ -273,6 +221,11 @@ const styles = StyleSheet.create({
     lineHeight: 32,
     textAlign: 'center',
     fontWeight: '500',
+  },
+  instructionText: {
+    color: theme.colors.textMuted,
+    fontSize: 10,
+    fontWeight: '600',
   },
   quizLabel: {
     color: theme.colors.accent,
@@ -299,17 +252,6 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     fontStyle: 'italic',
   },
-  footer: {
-    alignItems: 'center',
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.cardBorder,
-    paddingTop: theme.spacing.sm,
-  },
-  instructionText: {
-    color: theme.colors.textMuted,
-    fontSize: 10,
-    fontWeight: '600',
-  },
   voiceButton: {
     backgroundColor: `${theme.colors.accent}22`,
     borderWidth: 1.5,
@@ -324,25 +266,25 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     fontSize: 14,
   },
-  // Swipe indicator badges
   badge: {
     position: 'absolute',
     top: 25,
+    zIndex: 10,
     borderWidth: 2,
     borderRadius: theme.borderRadius.sm,
     paddingHorizontal: theme.spacing.md,
     paddingVertical: theme.spacing.xs,
-    transform: [{ rotate: '-15deg' }],
   },
   badgeGotIt: {
     right: 25,
     borderColor: theme.colors.success,
     backgroundColor: `${theme.colors.success}33`,
+    transform: [{ rotate: '-15deg' }],
   },
   badgeSimplify: {
     left: 25,
-    borderColor: theme.colors.secondary,
-    backgroundColor: `${theme.colors.secondary}33`,
+    borderColor: theme.colors.primary,
+    backgroundColor: `${theme.colors.primary}33`,
     transform: [{ rotate: '15deg' }],
   },
   badgeText: {

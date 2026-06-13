@@ -1,460 +1,259 @@
-import React, { useState } from 'react';
+import React, { useState } from "react";
 import {
-  StyleSheet,
-  View,
-  Text,
-  TouchableOpacity,
-  SafeAreaView,
-  TextInput,
-  ActivityIndicator,
-  KeyboardAvoidingView,
-  Platform,
-} from 'react-native';
-import { theme } from '../styles/theme';
-import { SwipeCard } from '../components/SwipeCard';
-import { llmService, Deck, ConceptCard } from '../services/llmService';
+  StyleSheet, View, Text, TouchableOpacity, SafeAreaView,
+  TextInput, ActivityIndicator, KeyboardAvoidingView, Platform, StatusBar,
+} from "react-native";
+import { theme } from "../styles/theme";
+import { SwipeCard } from "../components/SwipeCard";
+import { llmService, Deck, ConceptCard } from "../services/llmService";
 
-interface SwipeScreenProps {
+interface Props {
   deck: Deck;
-  onGoBack: () => void;
-  onVoiceLaunch: (card: ConceptCard, onComplete: (score: number) => void) => void;
+  onBack: () => void;
+  onVoiceChallenge: (cardIndex: number) => void;
 }
 
-export const SwipeScreen: React.FC<SwipeScreenProps> = ({ deck, onGoBack, onVoiceLaunch }) => {
+export const SwipeScreen: React.FC<Props> = ({ deck, onBack, onVoiceChallenge }) => {
   const [cards, setCards] = useState<ConceptCard[]>([...deck.cards]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
-  const [quizInput, setQuizInput] = useState('');
+  const [quizInput, setQuizInput] = useState("");
   const [isQuizChecked, setIsQuizChecked] = useState(false);
   const [isQuizCorrect, setIsQuizCorrect] = useState(false);
-  const [quizFeedback, setQuizFeedback] = useState('');
+  const [quizFeedback, setQuizFeedback] = useState("");
 
   const activeCard = cards[currentIndex];
-
-  // Helper: check if the card is a Gating Quiz (every 5th card index: 4, 9, 14...)
   const isQuizCard = activeCard && (currentIndex + 1) % 5 === 0 && !activeCard.isMastered;
+  const progress = cards.length > 0 ? currentIndex / cards.length : 0;
 
   const handleSwipeRight = () => {
-    // Mark card as mastered and set recall score to 100%
     setCards(prev => {
       const updated = [...prev];
-      updated[currentIndex] = {
-        ...updated[currentIndex],
-        isMastered: true,
-        scoreRecall: 100,
-        scoreRetention: 100,
-      };
+      updated[currentIndex] = { ...updated[currentIndex], isMastered: true, scoreRecall: 100, scoreRetention: 100 };
       return updated;
     });
-
-    // Reset quiz states
-    setQuizInput('');
-    setIsQuizChecked(false);
-    
-    // Advance index
+    setQuizInput(""); setIsQuizChecked(false);
     setCurrentIndex(prev => prev + 1);
   };
 
   const handleSwipeLeft = async () => {
     setIsLoading(true);
     try {
-      // Call LLM simplification service
-      const simplified = await llmService.simplifyExplanation(
-        activeCard.concept,
-        activeCard.explanation
-      );
-
-      // Update card explanation locally
+      const simpler = await llmService.simplifyConcept(activeCard);
       setCards(prev => {
         const updated = [...prev];
-        updated[currentIndex] = {
-          ...updated[currentIndex],
-          explanation: simplified,
-        };
+        updated[currentIndex] = { ...updated[currentIndex], concept: simpler, scoreRetention: Math.max(0, (updated[currentIndex].scoreRetention ?? 50) - 10) };
         return updated;
       });
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setIsLoading(false);
-    }
+    } catch {}
+    setIsLoading(false);
+    setCurrentIndex(prev => prev + 1);
   };
 
-  const handleLaunchVoiceLoop = () => {
-    onVoiceLaunch(activeCard, (score) => {
-      // Callback after voice Feynman loop completes
-      setCards(prev => {
-        const updated = [...prev];
-        updated[currentIndex] = {
-          ...updated[currentIndex],
-          scoreTransfer: score,
-          isMastered: score >= 70, // Mastered if Socratic score is >= 70%
-        };
-        return updated;
-      });
-      
-      // Auto advance after short delay
-      setTimeout(() => {
-        setCurrentIndex(prev => prev + 1);
-      }, 1500);
-    });
-  };
-
-  const checkQuizAnswer = async () => {
+  const handleCheckQuiz = async () => {
     if (!quizInput.trim()) return;
-
     setIsLoading(true);
     try {
-      const isCorrect = await llmService.validateQuizAnswer(
-        activeCard.quizQuestion,
-        activeCard.quizAnswer,
-        quizInput
-      );
-
+      const result = await llmService.evaluateQuizAnswer(activeCard, quizInput);
+      setIsQuizCorrect(result.correct);
+      setQuizFeedback(result.feedback);
       setIsQuizChecked(true);
-      setIsQuizCorrect(isCorrect);
-
-      if (isCorrect) {
-        setQuizFeedback('Correct! Swipe Right to unlock the next chapter.');
-      } else {
-        setQuizFeedback('Incorrect! Triggering Friction Gradient re-explanation...');
-        
-        // Friction Gradient: Reset the last 3 cards and simplify them!
-        setTimeout(async () => {
-          const startIndex = Math.max(0, currentIndex - 3);
-          const updatedCards = [...cards];
-          
-          for (let i = startIndex; i <= currentIndex; i++) {
-            const cardToSimplify = updatedCards[i];
-            const simplified = await llmService.simplifyExplanation(
-              cardToSimplify.concept,
-              cardToSimplify.explanation
-            );
-            updatedCards[i] = {
-              ...cardToSimplify,
-              explanation: simplified,
-              isMastered: false, // reset mastery so they re-review
-              scoreRecall: 30,   // lower scores
-            };
-          }
-          
-          setCards(updatedCards);
-          setCurrentIndex(startIndex); // bounce them back to review
-          setQuizInput('');
-          setIsQuizChecked(false);
-        }, 2000);
+      if (result.correct) {
+        setCards(prev => {
+          const updated = [...prev];
+          updated[currentIndex] = { ...updated[currentIndex], scoreTransfer: 100 };
+          return updated;
+        });
       }
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setIsLoading(false);
+    } catch {
+      setIsQuizChecked(true);
+      setIsQuizCorrect(false);
+      setQuizFeedback("Could not evaluate. Try again.");
     }
+    setIsLoading(false);
   };
 
-  const isDeckCompleted = currentIndex >= cards.length;
+  const handleNextAfterQuiz = () => {
+    setQuizInput(""); setIsQuizChecked(false); setIsQuizCorrect(false); setQuizFeedback("");
+    setCurrentIndex(prev => prev + 1);
+  };
+
+  const masteredCount = cards.filter(c => c.isMastered).length;
+
+  if (!activeCard || currentIndex >= cards.length) {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <StatusBar barStyle="light-content" />
+        <View style={styles.completedContainer}>
+          <Text style={styles.completedEmoji}>🏆</Text>
+          <Text style={styles.completedTitle}>Deck Complete!</Text>
+          <Text style={styles.completedSub}>You mastered {masteredCount} of {cards.length} concepts</Text>
+          <View style={styles.completedStats}>
+            <View style={styles.completedStat}>
+              <Text style={styles.completedStatVal}>{masteredCount}</Text>
+              <Text style={styles.completedStatLabel}>MASTERED</Text>
+            </View>
+            <View style={styles.completedStat}>
+              <Text style={[styles.completedStatVal, { color: theme.colors.success }]}>{Math.round((masteredCount / cards.length) * 100)}%</Text>
+              <Text style={styles.completedStatLabel}>SCORE</Text>
+            </View>
+          </View>
+          <TouchableOpacity style={styles.backBtn} onPress={onBack}>
+            <Text style={styles.backBtnText}>← Back to Decks</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
-    <SafeAreaView style={styles.container}>
-      {/* Top Header */}
+    <SafeAreaView style={styles.safe}>
+      <StatusBar barStyle="light-content" />
+
+      {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={onGoBack} style={styles.backButton}>
-          <Text style={styles.backButtonText}>✕ Close</Text>
+        <TouchableOpacity onPress={onBack} style={styles.headerBack}>
+          <Text style={styles.headerBackText}>← Back</Text>
         </TouchableOpacity>
-        <Text style={styles.deckTitle} numberOfLines={1}>{deck.title}</Text>
-        <Text style={styles.progressCounter}>
-          {isDeckCompleted ? cards.length : currentIndex + 1} / {cards.length}
-        </Text>
+        <Text style={styles.headerTitle} numberOfLines={1}>{deck.title}</Text>
+        <TouchableOpacity onPress={() => onVoiceChallenge(currentIndex)} style={styles.voiceBtn}>
+          <Text style={styles.voiceBtnText}>🎙️</Text>
+        </TouchableOpacity>
       </View>
 
-      {/* Main Screen Content */}
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.keyboardContainer}
-      >
-        <View style={styles.content}>
-          {isLoading && (
-            <View style={styles.loadingOverlay}>
-              <ActivityIndicator size="large" color={theme.colors.primary} />
-              <Text style={styles.loadingText}>Simplifying Concept on NPU...</Text>
-            </View>
-          )}
+      {/* Progress */}
+      <View style={styles.progressWrap}>
+        <View style={styles.progressBg}>
+          <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
+        </View>
+        <Text style={styles.progressText}>{currentIndex + 1} / {cards.length}</Text>
+      </View>
 
-          {isDeckCompleted ? (
-            /* Completed Deck Screen */
-            <View style={styles.completedContainer}>
-              <Text style={styles.completedEmoji}>🏆</Text>
-              <Text style={styles.completedTitle}>Syllabus Block Completed!</Text>
-              <Text style={styles.completedText}>
-                You have processed all concepts in this deck. Your mastery score has updated on the Dashboard.
-              </Text>
-              <TouchableOpacity onPress={onGoBack} style={styles.returnButton}>
-                <Text style={styles.returnButtonText}>Return to Dashboard</Text>
-              </TouchableOpacity>
-            </View>
-          ) : isQuizCard ? (
-            /* Gating Quiz Screen */
-            <View style={styles.quizCard}>
-              <View style={styles.quizHeader}>
-                <Text style={styles.quizBadge}>🔒 GATING QUIZ</Text>
-                <Text style={styles.quizSubtext}>Verify your recall to unlock the next cards</Text>
-              </View>
+      {/* Stats Strip */}
+      <View style={styles.statsStrip}>
+        <Text style={styles.statChip}>✅ {masteredCount} mastered</Text>
+        <Text style={styles.statChip}>⚡ {currentIndex + 1} seen</Text>
+      </View>
 
-              <View style={styles.quizBody}>
-                <Text style={styles.quizLabel}>QUESTION:</Text>
-                <Text style={styles.questionText}>{activeCard.quizQuestion}</Text>
-
+      {/* Card */}
+      {isLoading ? (
+        <View style={styles.loadingWrap}>
+          <ActivityIndicator size="large" color={theme.colors.primary} />
+          <Text style={styles.loadingText}>NPU Processing...</Text>
+        </View>
+      ) : isQuizCard ? (
+        <KeyboardAvoidingView style={styles.quizWrap} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+          <View style={styles.quizCard}>
+            <View style={styles.quizBadge}><Text style={styles.quizBadgeText}>🎯 QUIZ TIME</Text></View>
+            <Text style={styles.quizQ}>{activeCard.quizQuestion || `Explain the concept: "${activeCard.concept.slice(0, 80)}..."`}</Text>
+            {!isQuizChecked ? (
+              <>
                 <TextInput
+                  style={styles.quizInput}
                   placeholder="Type your answer here..."
                   placeholderTextColor={theme.colors.textMuted}
                   value={quizInput}
                   onChangeText={setQuizInput}
-                  style={styles.quizInput}
-                  editable={!isQuizChecked}
+                  multiline
+                  numberOfLines={3}
+                  textAlignVertical="top"
                 />
-
-                {isQuizChecked && (
-                  <View style={[
-                    styles.feedbackContainer,
-                    isQuizCorrect ? styles.feedbackCorrect : styles.feedbackIncorrect
-                  ]}>
-                    <Text style={[
-                      styles.feedbackText,
-                      isQuizCorrect ? { color: theme.colors.success } : { color: theme.colors.error }
-                    ]}>
-                      {quizFeedback}
-                    </Text>
-                  </View>
-                )}
+                <TouchableOpacity style={[styles.submitBtn, { opacity: quizInput.trim() ? 1 : 0.5 }]} onPress={handleCheckQuiz} disabled={!quizInput.trim()}>
+                  <Text style={styles.submitBtnText}>Check Answer ⚡</Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <View style={[styles.feedbackCard, { borderColor: isQuizCorrect ? theme.colors.success : theme.colors.danger }]}>
+                <Text style={styles.feedbackEmoji}>{isQuizCorrect ? "✅" : "❌"}</Text>
+                <Text style={[styles.feedbackTitle, { color: isQuizCorrect ? theme.colors.success : theme.colors.danger }]}>
+                  {isQuizCorrect ? "Correct!" : "Not quite"}
+                </Text>
+                <Text style={styles.feedbackText}>{quizFeedback}</Text>
+                <TouchableOpacity style={[styles.nextBtn, { backgroundColor: isQuizCorrect ? theme.colors.success : theme.colors.primary }]} onPress={handleNextAfterQuiz}>
+                  <Text style={styles.nextBtnText}>{isQuizCorrect ? "Continue →" : "Try Next Card →"}</Text>
+                </TouchableOpacity>
               </View>
+            )}
+          </View>
+        </KeyboardAvoidingView>
+      ) : (
+        <SwipeCard
+          card={activeCard}
+          isTop={true}
+          onSwipeLeft={() => { handleSwipeLeft(); }}
+          onSwipeRight={handleSwipeRight}
+          onVoiceLoop={() => onVoiceChallenge(currentIndex)}
+        />
+      )}
 
-              <View style={styles.quizFooter}>
-                {!isQuizChecked ? (
-                  <TouchableOpacity
-                    style={[styles.checkButton, { opacity: quizInput.trim() ? 1 : 0.6 }]}
-                    onPress={checkQuizAnswer}
-                    disabled={!quizInput.trim()}
-                  >
-                    <Text style={styles.checkButtonText}>Submit Answer (Local Verification)</Text>
-                  </TouchableOpacity>
-                ) : isQuizCorrect ? (
-                  <TouchableOpacity style={styles.unlockedButton} onPress={handleSwipeRight}>
-                    <Text style={styles.unlockedButtonText}>Unlock Feed →</Text>
-                  </TouchableOpacity>
-                ) : (
-                  <ActivityIndicator size="small" color={theme.colors.error} />
-                )}
-              </View>
-            </View>
-          ) : (
-            /* Regular Active Swipe Card */
-            <View style={styles.cardWrapper}>
-              <SwipeCard
-                card={activeCard}
-                isTop={true}
-                onSwipeLeft={handleSwipeLeft}
-                onSwipeRight={handleSwipeRight}
-                onVoiceLoop={handleLaunchVoiceLoop}
-              />
-            </View>
-          )}
+      {/* Swipe hints */}
+      {!isQuizCard && !isLoading && (
+        <View style={styles.hintsRow}>
+          <View style={styles.hintLeft}><Text style={styles.hintText}>← Simplify</Text></View>
+          <View style={styles.hintRight}><Text style={styles.hintText}>Got it! →</Text></View>
         </View>
-      </KeyboardAvoidingView>
+      )}
     </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: theme.colors.background,
-  },
-  keyboardContainer: {
-    flex: 1,
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.sm,
-    borderBottomWidth: 1.5,
-    borderColor: theme.colors.cardBorder,
-  },
-  backButton: {
-    paddingVertical: theme.spacing.xs,
-  },
-  backButtonText: {
-    color: theme.colors.textSecondary,
-    fontSize: 14,
-    fontWeight: 'bold',
-  },
-  deckTitle: {
-    color: theme.colors.textPrimary,
-    fontSize: 16,
-    fontWeight: 'bold',
-    maxWidth: '55%',
-  },
-  progressCounter: {
-    color: theme.colors.primary,
-    fontSize: 13,
-    fontWeight: 'bold',
-  },
-  content: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: theme.spacing.md,
-  },
-  cardWrapper: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  loadingOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(11, 15, 25, 0.85)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 10,
-  },
-  loadingText: {
-    color: theme.colors.textPrimary,
-    fontSize: 14,
-    fontWeight: '600',
-    marginTop: theme.spacing.md,
-  },
-  // Gating Quiz Cards layout
+  safe: { flex: 1, backgroundColor: theme.colors.background },
+  header: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 10 },
+  headerBack: { paddingRight: 12 },
+  headerBackText: { color: theme.colors.primary, fontSize: 15, fontWeight: "700" },
+  headerTitle: { flex: 1, color: theme.colors.textPrimary, fontSize: 15, fontWeight: "700", textAlign: "center" },
+  voiceBtn: { paddingLeft: 12 },
+  voiceBtnText: { fontSize: 22 },
+  progressWrap: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, marginBottom: 8, gap: 10 },
+  progressBg: { flex: 1, height: 6, backgroundColor: theme.colors.cardBorder, borderRadius: 3, overflow: "hidden" },
+  progressFill: { height: "100%", backgroundColor: theme.colors.primary, borderRadius: 3 },
+  progressText: { color: theme.colors.textMuted, fontSize: 12, fontWeight: "700", minWidth: 48, textAlign: "right" },
+  statsStrip: { flexDirection: "row", paddingHorizontal: 16, gap: 10, marginBottom: 12 },
+  statChip: { color: theme.colors.textSecondary, fontSize: 12, fontWeight: "600" },
+  loadingWrap: { flex: 1, justifyContent: "center", alignItems: "center" },
+  loadingText: { color: theme.colors.textSecondary, fontSize: 14, marginTop: 12, fontWeight: "600" },
+  quizWrap: { flex: 1, padding: 16 },
   quizCard: {
-    width: '100%',
-    backgroundColor: theme.colors.cardBackground,
-    borderWidth: 1.5,
-    borderColor: theme.colors.cardBorder,
-    borderRadius: theme.borderRadius.lg,
-    padding: theme.spacing.lg,
-    justifyContent: 'space-between',
-    height: '75%',
-  },
-  quizHeader: {
-    alignItems: 'center',
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.cardBorder,
-    paddingBottom: theme.spacing.sm,
+    backgroundColor: theme.colors.surface, borderRadius: theme.borderRadius.xl,
+    borderWidth: 1.5, borderColor: theme.colors.accent, padding: 20,
   },
   quizBadge: {
-    color: theme.colors.accent,
-    fontSize: 14,
-    fontWeight: 'bold',
-    letterSpacing: 1,
+    alignSelf: "flex-start", backgroundColor: theme.colors.accentGlow,
+    borderRadius: theme.borderRadius.full, paddingHorizontal: 12, paddingVertical: 4, marginBottom: 14,
   },
-  quizSubtext: {
-    color: theme.colors.textSecondary,
-    fontSize: 11,
-    marginTop: theme.spacing.xs,
-  },
-  quizBody: {
-    flex: 1,
-    justifyContent: 'center',
-    marginVertical: theme.spacing.md,
-  },
-  quizLabel: {
-    color: theme.colors.accent,
-    fontSize: 11,
-    fontWeight: 'bold',
-    marginBottom: theme.spacing.xs,
-  },
-  questionText: {
-    color: theme.colors.textPrimary,
-    fontSize: 18,
-    lineHeight: 28,
-    fontWeight: '500',
-    marginBottom: theme.spacing.lg,
-  },
+  quizBadgeText: { color: theme.colors.accent, fontSize: 12, fontWeight: "800", letterSpacing: 1 },
+  quizQ: { color: theme.colors.textPrimary, fontSize: 17, fontWeight: "700", lineHeight: 26, marginBottom: 16 },
   quizInput: {
-    backgroundColor: theme.colors.background,
-    borderColor: theme.colors.cardBorder,
-    borderWidth: 1.5,
-    borderRadius: theme.borderRadius.md,
-    color: theme.colors.textPrimary,
-    fontSize: 15,
-    padding: theme.spacing.md,
-    fontWeight: '500',
+    borderWidth: 1.5, borderColor: theme.colors.cardBorder, borderRadius: theme.borderRadius.md,
+    color: theme.colors.textPrimary, fontSize: 15, padding: 12,
+    backgroundColor: theme.colors.background, minHeight: 90, marginBottom: 14,
   },
-  feedbackContainer: {
-    marginTop: theme.spacing.md,
-    padding: theme.spacing.sm,
-    borderRadius: theme.borderRadius.sm,
-    borderWidth: 1,
+  submitBtn: { backgroundColor: theme.colors.accent, borderRadius: theme.borderRadius.md, paddingVertical: 14, alignItems: "center" },
+  submitBtnText: { color: "#fff", fontWeight: "800", fontSize: 15 },
+  feedbackCard: { borderWidth: 1.5, borderRadius: theme.borderRadius.lg, padding: 16, alignItems: "center" },
+  feedbackEmoji: { fontSize: 32, marginBottom: 8 },
+  feedbackTitle: { fontSize: 18, fontWeight: "900", marginBottom: 8 },
+  feedbackText: { color: theme.colors.textSecondary, fontSize: 14, textAlign: "center", lineHeight: 20, marginBottom: 16 },
+  nextBtn: { borderRadius: theme.borderRadius.md, paddingVertical: 12, paddingHorizontal: 24, alignItems: "center" },
+  nextBtnText: { color: "#fff", fontWeight: "800", fontSize: 15 },
+  hintsRow: { flexDirection: "row", justifyContent: "space-between", paddingHorizontal: 24, paddingBottom: 16 },
+  hintLeft: { backgroundColor: theme.colors.dangerBg, borderRadius: theme.borderRadius.full, paddingHorizontal: 16, paddingVertical: 6 },
+  hintRight: { backgroundColor: theme.colors.successBg, borderRadius: theme.borderRadius.full, paddingHorizontal: 16, paddingVertical: 6 },
+  hintText: { fontSize: 12, fontWeight: "700", color: theme.colors.textSecondary },
+  completedContainer: { flex: 1, justifyContent: "center", alignItems: "center", padding: 32 },
+  completedEmoji: { fontSize: 64, marginBottom: 20 },
+  completedTitle: { color: theme.colors.textPrimary, fontSize: 28, fontWeight: "900", marginBottom: 8 },
+  completedSub: { color: theme.colors.textSecondary, fontSize: 15, marginBottom: 32, textAlign: "center" },
+  completedStats: { flexDirection: "row", gap: 32, marginBottom: 40 },
+  completedStat: { alignItems: "center" },
+  completedStatVal: { color: theme.colors.primary, fontSize: 36, fontWeight: "900" },
+  completedStatLabel: { color: theme.colors.textMuted, fontSize: 11, fontWeight: "700", letterSpacing: 1, textTransform: "uppercase", marginTop: 4 },
+  backBtn: {
+    backgroundColor: theme.colors.primary, borderRadius: theme.borderRadius.lg,
+    paddingHorizontal: 32, paddingVertical: 14,
+    shadowColor: theme.colors.primary, shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4, shadowRadius: 10, elevation: 5,
   },
-  feedbackCorrect: {
-    borderColor: theme.colors.success,
-    backgroundColor: `${theme.colors.success}11`,
-  },
-  feedbackIncorrect: {
-    borderColor: theme.colors.error,
-    backgroundColor: `${theme.colors.error}11`,
-  },
-  feedbackText: {
-    fontSize: 13,
-    fontWeight: '600',
-    textAlign: 'center',
-  },
-  quizFooter: {
-    paddingTop: theme.spacing.sm,
-  },
-  checkButton: {
-    backgroundColor: theme.colors.primary,
-    borderRadius: theme.borderRadius.md,
-    paddingVertical: theme.spacing.md,
-    alignItems: 'center',
-  },
-  checkButtonText: {
-    color: theme.colors.textPrimary,
-    fontSize: 14,
-    fontWeight: 'bold',
-  },
-  unlockedButton: {
-    backgroundColor: theme.colors.success,
-    borderRadius: theme.borderRadius.md,
-    paddingVertical: theme.spacing.md,
-    alignItems: 'center',
-  },
-  unlockedButtonText: {
-    color: theme.colors.textPrimary,
-    fontSize: 14,
-    fontWeight: 'bold',
-  },
-  // Completed Screen
-  completedContainer: {
-    alignItems: 'center',
-    padding: theme.spacing.lg,
-  },
-  completedEmoji: {
-    fontSize: 64,
-    marginBottom: theme.spacing.md,
-  },
-  completedTitle: {
-    color: theme.colors.textPrimary,
-    fontSize: 22,
-    fontWeight: 'bold',
-    textAlign: 'center',
-  },
-  completedText: {
-    color: theme.colors.textSecondary,
-    fontSize: 14,
-    lineHeight: 22,
-    textAlign: 'center',
-    marginTop: theme.spacing.sm,
-    marginBottom: theme.spacing.lg,
-  },
-  returnButton: {
-    backgroundColor: theme.colors.primary,
-    borderRadius: theme.borderRadius.md,
-    paddingHorizontal: theme.spacing.xl,
-    paddingVertical: theme.spacing.md,
-  },
-  returnButtonText: {
-    color: theme.colors.textPrimary,
-    fontSize: 14,
-    fontWeight: 'bold',
-  },
+  backBtnText: { color: "#fff", fontWeight: "800", fontSize: 16 },
 });
