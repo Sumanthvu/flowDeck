@@ -79,7 +79,8 @@ export const VoiceScreen: React.FC<VoiceScreenProps> = ({
       setGradeResult(grading);
     } catch (e: any) {
       console.error(e);
-      alert(e?.message || "An error occurred during audio processing.");
+      const { Alert } = require('react-native');
+      Alert.alert("Evaluation Error", e?.message || "An error occurred during audio processing.");
     } finally {
       setIsLoading(false);
     }

@@ -1,6 +1,8 @@
 // On-device Whisper speech-to-text service interface for FlowDeck
+// @ts-ignore
 import { initWhisper, WhisperContext } from 'whisper.rn';
 import RNBlobUtil from 'react-native-blob-util';
+// @ts-ignore
 import LiveAudioStream from '@fugood/react-native-audio-pcm-stream';
 import { PermissionsAndroid, Platform } from 'react-native';
 
