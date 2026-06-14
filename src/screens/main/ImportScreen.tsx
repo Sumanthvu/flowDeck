@@ -8,7 +8,7 @@ import { pick, types, isErrorWithCode, errorCodes } from '@react-native-document
 import { theme } from '../../styles/theme';
 import { llmService, Deck } from '../../services/llmService';
 import { authService } from '../../services/authService';
-import { extractTextFromPdf } from '../../services/pdfService';
+import { extractTextFromPdf, convertPdfToImages, ocrPageImages } from '../../services/pdfService';
 
 interface Props {
   onDeckCreated: (deck: Deck) => void;
@@ -65,19 +65,46 @@ export const ImportScreen: React.FC<Props> = ({ onDeckCreated }) => {
       const user = await authService.getUser();
       if (!user) throw new Error('Not authenticated.');
 
-      let rawText = textInput;
       const title = mode === 'pdf' && pdfName
         ? pdfName.replace(/\.pdf$/i, '')
         : textInput.slice(0, 60).trim() || 'My Topic';
 
+      let newDeck: Deck;
+
       if (mode === 'pdf' && pdfUri) {
         setStepActive(0);
-        const extracted = await extractTextFromPdf(pdfUri);
-        rawText = extracted.text;
+        // Step A: Convert entire PDF to separate page images
+        const pageImages = await convertPdfToImages(pdfUri);
+        
+        // Step B: OCR only page 1 instantly for initial deck creation
+        const firstPageText = await ocrPageImages([pageImages[0]]);
+        
+        setStepActive(1);
+        // Step C: Generate first set of cards
+        const tempCards = await llmService.generateTempCardsFromText(firstPageText);
+        if (tempCards.length === 0) {
+          throw new Error('Could not generate cards from the first page of this PDF. Please verify its content.');
+        }
+
+        // Step D: Build the deck with the first page cards, queueing the rest for background OCR/generation
+        newDeck = {
+          id: `deck-${Date.now()}`,
+          title,
+          cards: tempCards,
+          pendingPageImages: pageImages.slice(1),
+          isIncremental: pageImages.length > 1,
+        };
+
+        // Save progressive deck to AsyncStorage
+        const decks = await llmService.getDecks();
+        decks.push(newDeck);
+        await llmService.saveDecks();
+      } else {
+        // Text mode generates all cards at once
+        setStepActive(1);
+        newDeck = await llmService.generateCardsFromText(title, textInput);
       }
 
-      setStepActive(1);
-      const newDeck = await llmService.generateCardsFromText(title, rawText);
       setStepActive(2);
       setAllDone();
       setTimeout(() => { setIsLoading(false); onDeckCreated(newDeck); }, 600);
