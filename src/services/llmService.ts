@@ -392,18 +392,17 @@ Strict Grading Rules:
 4. To get a "B", the explanation must be mostly accurate and cover at least 70% of the core concepts in the reference.
 5. To get an "A", the explanation must be fully complete, scientifically accurate, and cover all aspects of the reference.
 
-Return ONLY valid JSON with this exact structure, with no markdown formatting:
-{
-  "grade": "A" | "B" | "C" | "F",
-  "feedback": "a harsh, direct Socratic critique highlighting exactly what they missed",
-  "score": 0-100
-}<|im_end|>
+You must output your evaluation in the following exact format:
+GRADE: [A, B, C, or F]
+SCORE: [0 to 100]
+FEEDBACK: [a harsh, direct Socratic critique highlighting exactly what they missed]
+<|im_end|>
 <|im_start|>user
 Concept: "${card.concept}"
 Reference explanation: "${card.explanation}"
 Student's explanation: "${studentTranscript}"<|im_end|>
 <|im_start|>assistant
-{`;
+`;
 
     console.log(`[LLM-DEBUG] ========================================`);
     console.log(`[LLM-DEBUG] LLM CALL: gradeExplanation`);
@@ -421,42 +420,30 @@ Student's explanation: "${studentTranscript}"<|im_end|>
         stop: ['<|im_end|>', '<|endoftext|>'],
       });
 
-      const fullText = '{' + result.text;
-      console.log(`[LLM-DEBUG] RAW RESPONSE (including prepended brace):\n${fullText}`);
+      const text = result.text.trim();
+      console.log(`[LLM-DEBUG] RAW RESPONSE:\n${text}`);
       console.log(`[LLM-DEBUG] ----------------------------------------`);
 
-      const jsonMatch = fullText.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
-        throw new Error('AI engine did not return valid JSON.');
-      }
+      const gradeMatch = text.match(/GRADE:\s*([A-Za-z]+)/i);
+      const scoreMatch = text.match(/SCORE:\s*(\d+)/);
+      const feedbackMatch = text.match(/FEEDBACK:\s*([\s\S]+)/i);
 
-      const gradeData = JSON.parse(jsonMatch[0]);
+      let grade = gradeMatch ? gradeMatch[1].toUpperCase().trim() : 'F';
+      let score = scoreMatch ? parseInt(scoreMatch[1], 10) : 0;
+      let feedback = feedbackMatch ? feedbackMatch[1].trim() : 'Could not generate feedback.';
 
-      if (!gradeData || !gradeData.grade || !gradeData.feedback) {
-        throw new Error('AI engine returned malformed grading data.');
-      }
-
-      const grade = gradeData.grade.toUpperCase().trim();
+      // Sanitize values
       if (!['A', 'B', 'C', 'F'].includes(grade)) {
-        throw new Error(`AI engine returned an invalid grade: "${grade}"`);
+        grade = 'F';
       }
-
-      let score = typeof gradeData.score === 'number' ? gradeData.score : 0;
-      if (typeof gradeData.score !== 'number') {
-        if (grade === 'A') score = 95;
-        else if (grade === 'B') score = 80;
-        else if (grade === 'C') score = 60;
-        else score = 30;
+      if (isNaN(score)) {
+        score = 0;
       }
+      score = Math.min(100, Math.max(0, score));
 
-      console.log('[LLM-DEBUG] DECISION: Grading success:', JSON.stringify({ grade, feedback: gradeData.feedback, score }, null, 2));
+      console.log('[LLM-DEBUG] DECISION: Success - Grade calculated:', { grade, feedback, score });
       console.log(`[LLM-DEBUG] ========================================`);
-
-      return {
-        grade: grade as 'A' | 'B' | 'C' | 'F',
-        feedback: gradeData.feedback,
-        score: score,
-      };
+      return { grade: grade as 'A' | 'B' | 'C' | 'F', feedback, score };
     } catch (err) {
       console.log('[LLM-DEBUG] ERROR grading explanation:', err);
       console.log(`[LLM-DEBUG] ========================================`);
