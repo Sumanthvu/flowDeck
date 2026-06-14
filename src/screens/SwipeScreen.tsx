@@ -136,6 +136,12 @@ export const SwipeScreen: React.FC<Props> = ({ deck, initialIndex = 0, onBack, o
   const handleNextAfterQuiz = () => {
     setQuizInput(''); setIsQuizChecked(false); setIsQuizCorrect(false); setQuizFeedback('');
     setInQuiz(false); setQuizCard(null);
+    // Force FlatList to snap to the correct current index on quiz exit
+    setTimeout(() => {
+      if (flatListRef.current && viewportH > 0) {
+        flatListRef.current.scrollToIndex({ index: currentIndex, animated: false });
+      }
+    }, 50);
   };
 
   // ── Special states ─────────────────────────────────────────────────────────

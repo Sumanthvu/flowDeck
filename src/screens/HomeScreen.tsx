@@ -66,7 +66,8 @@ export const HomeScreen: React.FC<Props> = ({ onSelectDeck, onGoToImport, onGoTo
     (async () => {
       const u = await authService.getUser();
       setUser(u);
-      await llmService.loadModel((p, s) => {
+      // Load LLM in the background without blocking the UI transition
+      llmService.loadModel((p, s) => {
         setLoadingStatus(s);
         setDownloadProgress(p);
       });

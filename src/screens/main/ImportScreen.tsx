@@ -167,8 +167,8 @@ export const ImportScreen: React.FC<Props> = ({ onDeckCreated }) => {
             {pdfUri ? (
               <View style={styles.pdfSelectedBox}>
                 <Text style={{ fontSize: 28 }}>📄</Text>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.pdfSelectedName} numberOfLines={2}>{pdfName}</Text>
+                <View style={{ flex: 1, paddingRight: 8 }}>
+                  <Text style={styles.pdfSelectedName} numberOfLines={1} ellipsizeMode="middle">{pdfName}</Text>
                   <Text style={styles.pdfSelectedSub}>Ready to process</Text>
                 </View>
                 <TouchableOpacity onPress={() => { setPdfUri(null); setPdfName(null); }} style={styles.pdfClearBtn}>
