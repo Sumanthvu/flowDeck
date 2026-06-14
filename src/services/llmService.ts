@@ -576,7 +576,7 @@ Student's Answer: "${studentAnswer}"<|im_end|>
     console.log('[LLM] Progressive loading started for deck:', deck.title);
 
     try {
-      const BATCH_SIZE = 3;
+      const BATCH_SIZE = 8;
       const batchImages = deck.pendingPageImages.slice(0, BATCH_SIZE);
       const remainingImages = deck.pendingPageImages.slice(BATCH_SIZE);
 

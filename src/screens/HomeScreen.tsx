@@ -2,8 +2,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  SafeAreaView, Animated, ActivityIndicator, Dimensions,
+  Animated, ActivityIndicator, Dimensions,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { theme } from '../styles/theme';
 import { authService, User } from '../services/authService';
 import { llmService, Deck } from '../services/llmService';

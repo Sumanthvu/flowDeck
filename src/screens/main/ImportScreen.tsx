@@ -2,8 +2,9 @@
 import React, { useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
-  SafeAreaView, ActivityIndicator, ScrollView, StatusBar, Animated,
+  ActivityIndicator, ScrollView, StatusBar, Animated,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { pick, types, isErrorWithCode, errorCodes } from '@react-native-documents/picker';
 import { theme } from '../../styles/theme';
 import { llmService, Deck } from '../../services/llmService';
@@ -244,8 +245,10 @@ export const ImportScreen: React.FC<Props> = ({ onDeckCreated }) => {
             ].map(card => (
               <View key={card.title} style={styles.infoCard}>
                 <Text style={styles.infoIcon}>{card.icon}</Text>
-                <Text style={styles.infoTitle}>{card.title}</Text>
-                <Text style={styles.infoDesc}>{card.desc}</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.infoTitle}>{card.title}</Text>
+                  <Text style={styles.infoDesc}>{card.desc}</Text>
+                </View>
               </View>
             ))}
           </View>

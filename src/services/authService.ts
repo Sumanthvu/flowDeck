@@ -1,4 +1,4 @@
-﻿import AsyncStorage from '@react-native-async-storage/async-storage';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export interface User {
   id: string;
@@ -7,6 +7,7 @@ export interface User {
   createdAt: string;
   streak: number;
   xp: number;
+  activeDays?: string[];
 }
 
 const USER_KEY = '@flowdeck_user';
@@ -58,5 +59,39 @@ export const authService = {
   async isLoggedIn(): Promise<boolean> {
     const stored = await AsyncStorage.getItem(USER_KEY);
     return !!stored;
+  },
+
+  async recordActivity(): Promise<User | null> {
+    const user = await this.getUser();
+    if (!user) return null;
+
+    const todayStr = new Date().toISOString().split('T')[0];
+    const activeDays = user.activeDays || [];
+
+    // Append today
+    const updatedDays = [...activeDays, todayStr];
+
+    // Calculate streak
+    const uniqueDays = Array.from(new Set(activeDays)).sort();
+    let streak = user.streak || 0;
+
+    if (uniqueDays.length > 0) {
+      const lastActiveDayStr = uniqueDays[uniqueDays.length - 1];
+      if (lastActiveDayStr !== todayStr) {
+        const yesterday = new Date();
+        yesterday.setDate(yesterday.getDate() - 1);
+        const yesterdayStr = yesterday.toISOString().split('T')[0];
+
+        if (lastActiveDayStr === yesterdayStr) {
+          streak = streak + 1;
+        } else {
+          streak = 1;
+        }
+      }
+    } else {
+      streak = 1;
+    }
+
+    return this.updateUser({ activeDays: updatedDays, streak });
   },
 };

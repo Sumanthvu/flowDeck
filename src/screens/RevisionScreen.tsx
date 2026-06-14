@@ -1,9 +1,10 @@
 // src/screens/RevisionScreen.tsx
 import React, { useState } from 'react';
 import {
-  StyleSheet, View, Text, TouchableOpacity, SafeAreaView,
+  StyleSheet, View, Text, TouchableOpacity,
   TextInput, ActivityIndicator, KeyboardAvoidingView, Platform, StatusBar,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { theme } from '../styles/theme';
 import { llmService, Deck, ConceptCard } from '../services/llmService';
 

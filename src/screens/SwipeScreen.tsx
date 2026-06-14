@@ -1,10 +1,11 @@
 // src/screens/SwipeScreen.tsx — FlowDeck Vertical Reel Viewer
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  StyleSheet, View, Text, TouchableOpacity, SafeAreaView,
+  StyleSheet, View, Text, TouchableOpacity,
   TextInput, ActivityIndicator, KeyboardAvoidingView, Platform, StatusBar,
   FlatList, Dimensions,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { theme } from '../styles/theme';
 import { SwipeCard } from '../components/SwipeCard';
 import { llmService, Deck, ConceptCard } from '../services/llmService';
@@ -48,7 +49,7 @@ export const SwipeScreen: React.FC<Props> = ({ deck, initialIndex = 0, onBack, o
 
   // Background page scan trigger
   useEffect(() => {
-    if (cards.length - currentIndex <= 3 && remainingPending > 0 && !isBackgroundLoading) {
+    if (cards.length - currentIndex < 8 && remainingPending > 0 && !isBackgroundLoading) {
       setIsBackgroundLoading(true);
       llmService.loadMoreCardsForDeck(deck.id, (newCards) => {
         if (newCards?.length > 0) setCards(prev => [...prev, ...newCards]);

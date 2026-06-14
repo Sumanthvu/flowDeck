@@ -269,8 +269,8 @@ export function chunkTextIntoWindows(text: string): string[] {
   if (sentences.length === 0) return [];
 
   const chunks: string[] = [];
-  const WINDOW_SIZE = 5;
-  const SLIDE_SIZE = 3; // Overlap of 2 sentences
+  const WINDOW_SIZE = 10;
+  const SLIDE_SIZE = 5; // Overlap of 5 sentences
 
   for (let i = 0; i < sentences.length; i += SLIDE_SIZE) {
     const windowSentences = sentences.slice(i, i + WINDOW_SIZE);

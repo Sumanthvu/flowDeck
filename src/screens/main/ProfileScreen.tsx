@@ -5,12 +5,12 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  SafeAreaView,
   Animated,
   Switch,
   Alert,
   ActivityIndicator,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { theme } from "../../styles/theme";
 import { authService, User } from "../../services/authService";
 import { llmService } from "../../services/llmService";
@@ -22,15 +22,24 @@ interface Props {
 // ── Heatmap helpers ────────────────────────────────────────────────────────
 const HEATMAP_WEEKS = 15;
 const HEATMAP_DAYS  = 7;
-const buildHeatmap = (): number[] => {
+const buildUserHeatmap = (activeDays?: string[]): number[] => {
   const data: number[] = [];
-  for (let i = 0; i < HEATMAP_DAYS * HEATMAP_WEEKS; i++) {
-    const v = (Math.sin(i * 0.45 + 2) + 1) / 2;
-    data.push(v < 0.35 ? 0 : v < 0.6 ? 1 : v < 0.82 ? 2 : 3);
+  const daysList = activeDays || [];
+  const counts: Record<string, number> = {};
+  for (const day of daysList) {
+    counts[day] = (counts[day] || 0) + 1;
+  }
+  const totalDays = HEATMAP_DAYS * HEATMAP_WEEKS;
+  for (let i = 0; i < totalDays; i++) {
+    const d = new Date();
+    d.setDate(d.getDate() - (totalDays - 1 - i));
+    const dateStr = d.toISOString().split('T')[0];
+    const count = counts[dateStr] || 0;
+    const level = count === 0 ? 0 : count === 1 ? 1 : count === 2 ? 2 : 3;
+    data.push(level);
   }
   return data;
 };
-const heatmapData = buildHeatmap();
 const HEAT_COLORS = ['#E5E7EB', '#FED7AA', '#FB923C', '#FF6B35'];
 const HeatSquare = ({ level }: { level: number }) => (
   <View style={[profileStyles.heatSquare, { backgroundColor: HEAT_COLORS[level] }]} />
@@ -192,7 +201,7 @@ export const ProfileScreen: React.FC<Props> = ({ onLogout }) => {
           <Text style={styles.sectionTitle}>STUDY ACTIVITY</Text>
           <View style={profileStyles.heatmapCard}>
             <View style={profileStyles.heatmapRow}>
-              {heatmapData.map((v, i) => (
+              {buildUserHeatmap(user?.activeDays || []).map((v, i) => (
                 <HeatSquare key={i} level={v} />
               ))}
             </View>

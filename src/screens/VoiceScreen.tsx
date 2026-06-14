@@ -5,10 +5,10 @@ import {
   View,
   Text,
   TouchableOpacity,
-  SafeAreaView,
   ActivityIndicator,
   ScrollView,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { theme } from '../styles/theme';
 import { ConceptCard, llmService } from '../services/llmService';
 import { whisperService } from '../services/whisperService';

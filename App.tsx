@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { View, ActivityIndicator, StyleSheet } from "react-native";
+import { SafeAreaProvider } from "react-native-safe-area-context";
 import { AuthNavigator } from "./src/navigation/AuthNavigator";
 import { MainNavigator, MainTab } from "./src/navigation/MainNavigator";
 import { HomeScreen } from "./src/screens/HomeScreen";
@@ -28,12 +29,18 @@ export default function App() {
 
   useEffect(() => {
     authService.isLoggedIn().then(loggedIn => {
-      if (loggedIn) setView({ type: "main", tab: "home" });
+      if (loggedIn) {
+        setView({ type: "main", tab: "home" });
+        authService.recordActivity().catch(console.error);
+      }
       setCheckingAuth(false);
     });
   }, []);
 
-  const handleAuth    = () => setView({ type: "main", tab: "home" });
+  const handleAuth    = () => {
+    setView({ type: "main", tab: "home" });
+    authService.recordActivity().catch(console.error);
+  };
   const handleLogout  = () => { setActiveTab("home"); setView({ type: "auth" }); };
 
   // ── Select a deck to study ────────────────────────────────────────────────
@@ -65,80 +72,89 @@ export default function App() {
     setView({ type: "main", tab });
   };
 
-  if (checkingAuth) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color={theme.colors.primary} />
-      </View>
-    );
-  }
+  const renderContent = () => {
+    if (checkingAuth) {
+      return (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={theme.colors.primary} />
+        </View>
+      );
+    }
 
-  if (view.type === "auth") {
-    return <AuthNavigator onAuthenticated={handleAuth} />;
-  }
+    if (view.type === "auth") {
+      return <AuthNavigator onAuthenticated={handleAuth} />;
+    }
 
-  if (view.type === "swipe") {
-    return (
-      <SwipeScreen
-        deck={view.deck}
-        initialIndex={view.initialIndex || 0}
-        onBack={() => handleBackToSource(view.sourceTab)}
-        onVoiceChallenge={(cardIndex) =>
-          handleVoiceChallenge(view.deck, cardIndex, view.sourceTab)
-        }
-      />
-    );
-  }
+    if (view.type === "swipe") {
+      return (
+        <SwipeScreen
+          deck={view.deck}
+          initialIndex={view.initialIndex || 0}
+          onBack={() => handleBackToSource(view.sourceTab)}
+          onVoiceChallenge={(cardIndex) =>
+            handleVoiceChallenge(view.deck, cardIndex, view.sourceTab)
+          }
+        />
+      );
+    }
 
-  if (view.type === "voice") {
-    const activeCard = view.deck.cards[view.cardIndex];
-    return (
-      <VoiceScreen
-        card={activeCard}
-        onGoBack={() =>
-          setView({ type: "swipe", deck: view.deck, initialIndex: view.cardIndex, sourceTab: view.sourceTab })
-        }
-        onFeedbackComplete={(score) => {
-          activeCard.scoreTransfer = score;
-          if (score >= 80) activeCard.isMastered = true;
-          setView({ type: "swipe", deck: view.deck, initialIndex: view.cardIndex, sourceTab: view.sourceTab });
-        }}
-      />
-    );
-  }
+    if (view.type === "voice") {
+      const activeCard = view.deck.cards[view.cardIndex];
+      return (
+        <VoiceScreen
+          card={activeCard}
+          onGoBack={() =>
+            setView({ type: "swipe", deck: view.deck, initialIndex: view.cardIndex, sourceTab: view.sourceTab })
+          }
+          onFeedbackComplete={(score) => {
+            activeCard.scoreTransfer = score;
+            if (score >= 80) activeCard.isMastered = true;
+            authService.recordActivity().catch(console.error);
+            setView({ type: "swipe", deck: view.deck, initialIndex: view.cardIndex, sourceTab: view.sourceTab });
+          }}
+        />
+      );
+    }
 
-  if (view.type === "revision") {
+    if (view.type === "revision") {
+      return (
+        <RevisionScreen
+          deck={view.deck}
+          onBack={() => handleBackToSource(view.sourceTab)}
+        />
+      );
+    }
+
     return (
-      <RevisionScreen
-        deck={view.deck}
-        onBack={() => handleBackToSource(view.sourceTab)}
-      />
+      <MainNavigator currentTab={activeTab} onTabChange={handleTabChange}>
+        {activeTab === "home" && (
+          <HomeScreen
+            onSelectDeck={(deck) => handleSelectDeck(deck, "home")}
+            onGoToImport={() => handleTabChange("import")}
+            onGoToLearn={() => handleTabChange("learn")}
+          />
+        )}
+        {activeTab === "learn" && (
+          <DeckListScreen
+            onSelectDeck={(deck) => handleSelectDeck(deck, "learn")}
+            onReviseDeck={(deck) => setView({ type: "revision", deck, sourceTab: "learn" })}
+            onGoToImport={() => handleTabChange("import")}
+          />
+        )}
+        {activeTab === "import" && (
+          <ImportScreen onDeckCreated={handleDeckCreated} />
+        )}
+        {activeTab === "profile" && (
+          <ProfileScreen onLogout={handleLogout} />
+        )}
+      </MainNavigator>
     );
-  }
+  };
 
   return (
-    <MainNavigator currentTab={activeTab} onTabChange={handleTabChange}>
-      {activeTab === "home" && (
-        <HomeScreen
-          onSelectDeck={(deck) => handleSelectDeck(deck, "home")}
-          onGoToImport={() => handleTabChange("import")}
-          onGoToLearn={() => handleTabChange("learn")}
-        />
-      )}
-      {activeTab === "learn" && (
-        <DeckListScreen
-          onSelectDeck={(deck) => handleSelectDeck(deck, "learn")}
-          onReviseDeck={(deck) => setView({ type: "revision", deck, sourceTab: "learn" })}
-          onGoToImport={() => handleTabChange("import")}
-        />
-      )}
-      {activeTab === "import" && (
-        <ImportScreen onDeckCreated={handleDeckCreated} />
-      )}
-      {activeTab === "profile" && (
-        <ProfileScreen onLogout={handleLogout} />
-      )}
-    </MainNavigator>
+    <SafeAreaProvider>
+      {renderContent()}
+    </SafeAreaProvider>
   );
 }
 

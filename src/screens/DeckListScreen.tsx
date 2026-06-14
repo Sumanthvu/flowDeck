@@ -2,9 +2,10 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
-  SafeAreaView, ActivityIndicator, Modal, TouchableWithoutFeedback,
+  ActivityIndicator, Modal, TouchableWithoutFeedback,
   StatusBar, Animated,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { theme } from '../styles/theme';
 import { llmService, Deck } from '../services/llmService';
 
