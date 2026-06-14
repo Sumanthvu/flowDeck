@@ -1,516 +1,340 @@
+// src/screens/main/ImportScreen.tsx — FlowDeck Upload Page
 import React, { useState } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  TextInput, SafeAreaView, ActivityIndicator, Alert,
+  View, Text, StyleSheet, TouchableOpacity, TextInput,
+  SafeAreaView, ActivityIndicator, ScrollView, StatusBar, Animated,
 } from 'react-native';
-import { pick, types, errorCodes, isErrorWithCode } from '@react-native-documents/picker';
+import { pick, types, isErrorWithCode, errorCodes } from '@react-native-documents/picker';
 import { theme } from '../../styles/theme';
 import { llmService, Deck } from '../../services/llmService';
-import { convertPdfToImages, ocrPageImages } from '../../services/pdfService';
+import { authService } from '../../services/authService';
+import { extractTextFromPdf } from '../../services/pdfService';
 
 interface Props {
   onDeckCreated: (deck: Deck) => void;
 }
 
-type Tab = 'text' | 'pdf';
-type PdfState = 'idle' | 'picked' | 'extracting' | 'ready' | 'error';
+type Mode = 'text' | 'pdf';
+
+interface GenStep {
+  label: string;
+  done: boolean;
+  active: boolean;
+}
+
+const INIT_STEPS: GenStep[] = [
+  { label: 'Parsing text',          done: false, active: false },
+  { label: 'Chunking into topics',  done: false, active: false },
+  { label: 'Generating cards',      done: false, active: false },
+  { label: 'Calculating mastery',   done: false, active: false },
+];
 
 export const ImportScreen: React.FC<Props> = ({ onDeckCreated }) => {
-  const [tab, setTab] = useState<Tab>('text');
+  const [mode, setMode]           = useState<Mode>('text');
+  const [textInput, setTextInput] = useState('');
+  const [pdfName, setPdfName]     = useState<string | null>(null);
+  const [pdfUri, setPdfUri]       = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [steps, setSteps]         = useState<GenStep[]>(INIT_STEPS);
+  const [error, setError]         = useState<string | null>(null);
 
-  // ── Text tab state ──────────────────────────────────────────────────
-  const [title, setTitle] = useState('');
-  const [body, setBody] = useState('');
-  const [preview, setPreview] = useState<string[]>([]);
-  const [processing, setProcessing] = useState(false);
-  const [generatedDeck, setGeneratedDeck] = useState<Deck | null>(null);
+  const setStepActive = (i: number) => setSteps(prev => prev.map((s, idx) => ({ ...s, active: idx === i, done: idx < i })));
+  const setAllDone    = ()           => setSteps(prev => prev.map(s => ({ ...s, active: false, done: true })));
 
-  // ── PDF tab state ───────────────────────────────────────────────────
-  const [pdfState, setPdfState] = useState<PdfState>('idle');
-  const [pdfName, setPdfName] = useState('');
-  const [pdfTitle, setPdfTitle] = useState('');
-  const [pdfChunks, setPdfChunks] = useState<string[]>([]);
-  const [pdfPageImages, setPdfPageImages] = useState<string[]>([]);
-  const [pdfPageCount, setPdfPageCount] = useState(0);
-  const [pdfError, setPdfError] = useState('');
-  const [pdfDeck, setPdfDeck] = useState<Deck | null>(null);
-  const [generatingPdf, setGeneratingPdf] = useState(false);
-
-  // ── Text tab handlers ───────────────────────────────────────────────
-  const handleChunkPreview = () => {
-    if (!body.trim()) return;
-    const chunks = body.split(/\n\n+/).map(s => s.trim()).filter(s => s.length > 20).slice(0, 5);
-    setPreview(chunks);
-  };
-
-  const handleAtomize = async () => {
-    if (!body.trim()) { Alert.alert('Empty', 'Please paste some text first.'); return; }
-    setProcessing(true);
+  const pickPdf = async () => {
     try {
-      const deck = await llmService.generateCardsFromText(title || 'Imported Deck', body);
-      setGeneratedDeck(deck);
-      setPreview([]);
+      const [res] = await pick({ type: [types.pdf] });
+      setPdfUri(res.uri);
+      setPdfName(res.name ?? 'document.pdf');
+      setError(null);
     } catch (e: any) {
-      Alert.alert('Error', e.message || 'Failed to generate cards');
-    } finally {
-      setProcessing(false);
+      if (!isErrorWithCode(e) || e.code !== errorCodes.OPERATION_CANCELED) {
+        setError('Failed to pick PDF. Please try again.');
+      }
     }
   };
 
-  const resetText = () => {
-    setGeneratedDeck(null); setTitle(''); setBody(''); setPreview([]);
-  };
+  const handleGenerate = async () => {
+    if (mode === 'text' && !textInput.trim()) { setError('Please enter some text first.'); return; }
+    if (mode === 'pdf'  && !pdfUri)           { setError('Please select a PDF first.');    return; }
+    setError(null);
+    setIsLoading(true);
+    setSteps(INIT_STEPS);
 
-  const handlePickPdf = async () => {
     try {
-      const [result] = await pick({ type: [types.pdf] });
-      const name = result.name ?? 'Document';
-      const potentialTitle = name.replace(/\.pdf$/i, '');
+      const user = await authService.getUser();
+      if (!user) throw new Error('Not authenticated.');
 
-      // Check if a deck with this title already exists
-      const existingDecks = await llmService.getDecks();
-      const exists = existingDecks.some(d => d.title.toLowerCase() === potentialTitle.toLowerCase());
-      if (exists) {
-        Alert.alert(
-          'Deck Already Exists',
-          `A deck named "${potentialTitle}" has already been imported. Please choose another PDF or delete the existing deck first.`
-        );
-        return;
+      let rawText = textInput;
+      const title = mode === 'pdf' && pdfName
+        ? pdfName.replace(/\.pdf$/i, '')
+        : textInput.slice(0, 60).trim() || 'My Topic';
+
+      if (mode === 'pdf' && pdfUri) {
+        setStepActive(0);
+        const extracted = await extractTextFromPdf(pdfUri);
+        rawText = extracted.text;
       }
 
-      setPdfName(name);
-      setPdfTitle(potentialTitle);
-      setPdfState('extracting');
-      setPdfError('');
-      setPdfDeck(null);
-
-      // Convert PDF to images instantly
-      const images = await convertPdfToImages(result.uri);
-
-      if (images.length === 0) {
-        setPdfError('Failed to convert PDF pages to images.');
-        setPdfState('error');
-        return;
-      }
-
-      setPdfPageImages(images);
-      setPdfPageCount(images.length);
-      setPdfState('ready');
+      setStepActive(1);
+      const newDeck = await llmService.generateCardsFromText(title, rawText);
+      setStepActive(2);
+      setAllDone();
+      setTimeout(() => { setIsLoading(false); onDeckCreated(newDeck); }, 600);
     } catch (e: any) {
-      if (isErrorWithCode(e) && e.code === errorCodes.OPERATION_CANCELED) {
-        setPdfState('idle');
-      } else {
-        setPdfError(e.message || 'Failed to open PDF.');
-        setPdfState('error');
-      }
+      setIsLoading(false);
+      setSteps(INIT_STEPS);
+      setError(e?.message ?? 'An error occurred. Please try again.');
     }
   };
 
-  const handleGenerateFromPdf = async () => {
-    if (pdfPageImages.length === 0) return;
+  const canSubmit = mode === 'text' ? textInput.trim().length > 30 : !!pdfUri;
 
-    const titleToCheck = (pdfTitle || pdfName).trim();
-    const existingDecks = await llmService.getDecks();
-    const exists = existingDecks.some(d => d.title.toLowerCase() === titleToCheck.toLowerCase());
-    if (exists) {
-      Alert.alert(
-        'Deck Already Exists',
-        `A deck named "${titleToCheck}" already exists. Please rename your deck before generating.`
-      );
-      return;
-    }
-
-    setGeneratingPdf(true);
-    try {
-      // Process first 3 pages initially
-      const firstBatch = pdfPageImages.slice(0, 3);
-      const remainingImages = pdfPageImages.slice(3);
-
-      console.log('[ImportScreen] Extracting text from first batch of pages...');
-      const text = await ocrPageImages(firstBatch);
-
-      if (!text.trim()) {
-        throw new Error('No readable text found in the first pages of this PDF.');
-      }
-
-      console.log('[ImportScreen] Generating initial flashcards...');
-      const deck = await llmService.generateCardsFromText(pdfTitle || pdfName, text);
-      
-      // Update incremental properties
-      deck.pendingPageImages = remainingImages;
-      deck.isIncremental = remainingImages.length > 0;
-
-      // Persist the progressive generation progress
-      await llmService.saveDecks();
-
-      setPdfDeck(deck);
-      onDeckCreated(deck);
-    } catch (e: any) {
-      Alert.alert('Error', e.message || 'Failed to generate cards from PDF');
-    } finally {
-      setGeneratingPdf(false);
-    }
-  };
-
-  const resetPdf = () => {
-    setPdfState('idle'); setPdfName(''); setPdfTitle('');
-    setPdfChunks([]); setPdfPageCount(0); setPdfError(''); setPdfDeck(null);
-    setPdfPageImages([]);
-  };
-
-  // ── Render ──────────────────────────────────────────────────────────
   return (
     <SafeAreaView style={styles.safe}>
-      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+      <StatusBar barStyle="dark-content" />
+      <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
 
-        <View style={styles.header}>
-          <Text style={styles.title}>Import Content</Text>
-          <Text style={styles.sub}>Transform any material into AI-powered flashcards</Text>
+        {/* Page title */}
+        <View style={styles.pageHeader}>
+          <Text style={styles.pageTitle}>Import Content</Text>
+          <Text style={styles.pageSub}>Paste text or upload a PDF to generate your deck</Text>
         </View>
 
-        {/* Tab selector */}
-        <View style={styles.tabs}>
-          {(['text', 'pdf'] as Tab[]).map(t => (
+        {/* Mode Toggle */}
+        <View style={styles.modeToggle}>
+          {(['text', 'pdf'] as Mode[]).map((m) => (
             <TouchableOpacity
-              key={t}
-              style={[styles.tabBtn, tab === t && styles.tabBtnActive]}
-              onPress={() => setTab(t)}
+              key={m}
+              style={[styles.modeBtn, mode === m && styles.modeBtnActive]}
+              onPress={() => { setMode(m); setError(null); }}
             >
-              <Text style={[styles.tabText, tab === t && styles.tabTextActive]}>
-                {t === 'text' ? '📝 Paste Text' : '📄 PDF Upload'}
+              <Text style={styles.modeBtnIcon}>{m === 'text' ? '📝' : '📄'}</Text>
+              <Text style={[styles.modeBtnLabel, mode === m && styles.modeBtnLabelActive]}>
+                {m === 'text' ? 'Paste Text' : 'Upload PDF'}
               </Text>
             </TouchableOpacity>
           ))}
         </View>
 
-        {/* ── TEXT TAB ── */}
-        {tab === 'text' && (
-          <View style={styles.card}>
-            <Text style={styles.label}>DOCUMENT TITLE</Text>
+        {/* Mode Panel */}
+        {mode === 'text' ? (
+          <View style={styles.panel}>
+            <Text style={styles.panelLabel}>PASTE YOUR NOTES OR CONTENT</Text>
             <TextInput
-              style={styles.inputTitle}
-              placeholder="e.g. Newtonian Mechanics — Ch 5"
-              placeholderTextColor={theme.colors.textMuted}
-              value={title}
-              onChangeText={setTitle}
-            />
-
-            <Text style={styles.label}>CONTENT</Text>
-            <TextInput
-              style={styles.inputBody}
-              placeholder="Paste your lecture notes, textbook content, or study material here..."
-              placeholderTextColor={theme.colors.textMuted}
-              value={body}
-              onChangeText={setBody}
+              style={styles.textArea}
+              value={textInput}
+              onChangeText={setTextInput}
               multiline
               numberOfLines={8}
+              placeholder="Paste your lecture notes, textbook excerpt, or any educational content here..."
+              placeholderTextColor={theme.colors.textMuted}
               textAlignVertical="top"
+              editable={!isLoading}
             />
-
-            {body.trim().length > 0 && !generatedDeck && !processing && (
-              <TouchableOpacity style={styles.previewBtn} onPress={handleChunkPreview}>
-                <Text style={styles.previewBtnText}>
-                  👁 Preview Chunks ({body.split(/\n\n+/).filter(s => s.trim().length > 20).length} detected)
-                </Text>
-              </TouchableOpacity>
-            )}
-
-            {preview.length > 0 && (
-              <View style={styles.previewSection}>
-                <Text style={styles.previewTitle}>Chunk Preview</Text>
-                {preview.map((chunk, i) => (
-                  <View key={i} style={styles.chunkCard}>
-                    <View style={styles.chunkNum}><Text style={styles.chunkNumText}>{i + 1}</Text></View>
-                    <Text style={styles.chunkText} numberOfLines={3}>{chunk}</Text>
-                  </View>
-                ))}
-              </View>
-            )}
-
-            {processing ? (
-              <View style={styles.processingCard}>
-                <ActivityIndicator color={theme.colors.primary} size="large" />
-                <Text style={styles.processingText}>⚡ Generating flashcards...</Text>
-                <Text style={styles.processingSubText}>Analysing and atomising your content</Text>
-              </View>
-            ) : generatedDeck ? (
-              <View style={styles.successCard}>
-                <Text style={styles.successIcon}>✅</Text>
-                <Text style={styles.successTitle}>{generatedDeck.cards.length} Cards Generated!</Text>
-                <Text style={styles.successSub}>"{generatedDeck.title}" is ready to study</Text>
-                <TouchableOpacity style={styles.studyNowBtn} onPress={() => onDeckCreated(generatedDeck)}>
-                  <Text style={styles.studyNowText}>Study Now →</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.importMoreBtn} onPress={resetText}>
-                  <Text style={styles.importMoreText}>Import More</Text>
+            <Text style={styles.charCount}>{textInput.length} characters</Text>
+          </View>
+        ) : (
+          <View style={styles.panel}>
+            <Text style={styles.panelLabel}>SELECT A PDF DOCUMENT</Text>
+            {pdfUri ? (
+              <View style={styles.pdfSelectedBox}>
+                <Text style={{ fontSize: 28 }}>📄</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.pdfSelectedName} numberOfLines={2}>{pdfName}</Text>
+                  <Text style={styles.pdfSelectedSub}>Ready to process</Text>
+                </View>
+                <TouchableOpacity onPress={() => { setPdfUri(null); setPdfName(null); }} style={styles.pdfClearBtn}>
+                  <Text style={styles.pdfClearText}>✕</Text>
                 </TouchableOpacity>
               </View>
             ) : (
-              <TouchableOpacity
-                style={[styles.atomizeBtn, { opacity: body.trim() ? 1 : 0.5 }]}
-                onPress={handleAtomize}
-                disabled={!body.trim()}
-              >
-                <Text style={styles.atomizeBtnText}>⚡ Atomize & Generate Cards</Text>
+              <TouchableOpacity style={styles.pdfDropZone} onPress={pickPdf}>
+                <Text style={styles.pdfDropIcon}>📂</Text>
+                <Text style={styles.pdfDropTitle}>Tap to browse files</Text>
+                <Text style={styles.pdfDropSub}>PDF files supported</Text>
               </TouchableOpacity>
             )}
           </View>
         )}
 
-        {/* ── PDF TAB ── */}
-        {tab === 'pdf' && (
-          <View style={styles.card}>
-
-            {/* IDLE — pick a file */}
-            {pdfState === 'idle' && (
-              <>
-                <View style={styles.pdfDropZone}>
-                  <Text style={styles.pdfIcon}>📄</Text>
-                  <Text style={styles.pdfDropTitle}>Upload a PDF</Text>
-                  <Text style={styles.pdfDropSub}>
-                    Pick any textbook, lecture notes, or study PDF from your device.
-                    Text is extracted and turned into flashcards — all on-device.
-                  </Text>
-                  <TouchableOpacity style={styles.pickBtn} onPress={handlePickPdf}>
-                    <Text style={styles.pickBtnText}>📁 Choose PDF File</Text>
-                  </TouchableOpacity>
-                </View>
-                <View style={styles.pdfInfoRow}>
-                  {[['🔒', '100% On-Device'], ['⚡', 'Instant Extraction'], ['🎯', 'Auto-Chunked']].map(([icon, label]) => (
-                    <View key={label} style={styles.pdfInfoItem}>
-                      <Text style={styles.pdfInfoIcon}>{icon}</Text>
-                      <Text style={styles.pdfInfoText}>{label}</Text>
-                    </View>
-                  ))}
-                </View>
-              </>
-            )}
-
-            {/* EXTRACTING */}
-            {pdfState === 'extracting' && (
-              <View style={styles.processingCard}>
-                <ActivityIndicator color={theme.colors.accent} size="large" />
-                <Text style={styles.processingText}>📄 Reading "{pdfName}"...</Text>
-                <Text style={styles.processingSubText}>Extracting text from PDF</Text>
-              </View>
-            )}
-
-            {/* ERROR */}
-            {pdfState === 'error' && (
-              <View style={styles.errorCard}>
-                <Text style={styles.errorIcon}>⚠️</Text>
-                <Text style={styles.errorTitle}>Could Not Read PDF</Text>
-                <Text style={styles.errorMsg}>{pdfError}</Text>
-                <TouchableOpacity style={styles.retryBtn} onPress={resetPdf}>
-                  <Text style={styles.retryBtnText}>Try Another File</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-
-            {/* READY — show extracted info + title input */}
-            {(pdfState === 'ready' || pdfState === 'picked') && !pdfDeck && (
-              <>
-                <View style={styles.pdfSuccessRow}>
-                  <Text style={styles.pdfSuccessIcon}>📄</Text>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.pdfSuccessName} numberOfLines={1}>{pdfName}</Text>
-                    <Text style={styles.pdfSuccessMeta}>
-                      ~{pdfPageCount} page{pdfPageCount !== 1 ? 's' : ''} detected
-                    </Text>
-                  </View>
-                  <TouchableOpacity onPress={resetPdf} style={styles.clearBtn}>
-                    <Text style={styles.clearBtnText}>✕</Text>
-                  </TouchableOpacity>
-                </View>
-
-                <Text style={styles.label}>DECK TITLE</Text>
-                <TextInput
-                  style={styles.inputTitle}
-                  placeholder="Name for this deck"
-                  placeholderTextColor={theme.colors.textMuted}
-                  value={pdfTitle}
-                  onChangeText={setPdfTitle}
-                />
-
-                {/* Progressive Flow Description */}
-                <View style={styles.progressiveInfoCard}>
-                  <Text style={styles.progressiveInfoTitle}>🚀 Progressive Flashcard Flow</Text>
-                  <Text style={styles.progressiveInfoBody}>
-                    To save time and resources, FlowDeck will instantly initialize this deck by reading the first <Text style={{ fontWeight: 'bold', color: theme.colors.textPrimary }}>3 pages</Text> of your PDF.
-                  </Text>
-                  <Text style={styles.progressiveInfoBody}>
-                    As you study, our AI engine will automatically scan and generate flashcards for the remaining pages in the background.
-                  </Text>
-                </View>
-
-                {generatingPdf ? (
-                  <View style={styles.processingCard}>
-                    <ActivityIndicator color={theme.colors.primary} size="large" />
-                    <Text style={styles.processingText}>⚡ Generating flashcards from PDF...</Text>
-                    <Text style={styles.processingSubText}>Processing first 3 pages...</Text>
-                  </View>
-                ) : (
-                  <TouchableOpacity style={styles.atomizeBtn} onPress={handleGenerateFromPdf}>
-                    <Text style={styles.atomizeBtnText}>⚡ Generate Cards from PDF</Text>
-                  </TouchableOpacity>
-                )}
-              </>
-            )}
-
-            {/* SUCCESS */}
-            {pdfDeck && (
-              <View style={styles.successCard}>
-                <Text style={styles.successIcon}>✅</Text>
-                <Text style={styles.successTitle}>{pdfDeck.cards.length} Cards Generated!</Text>
-                <Text style={styles.successSub}>"{pdfDeck.title}" is ready to study</Text>
-                <TouchableOpacity style={styles.studyNowBtn} onPress={() => onDeckCreated(pdfDeck)}>
-                  <Text style={styles.studyNowText}>Study Now →</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.importMoreBtn} onPress={resetPdf}>
-                  <Text style={styles.importMoreText}>Import Another PDF</Text>
-                </TouchableOpacity>
-              </View>
-            )}
+        {/* Error */}
+        {error && (
+          <View style={styles.errorBox}>
+            <Text style={styles.errorText}>⚠️ {error}</Text>
           </View>
         )}
+
+        {/* Generate Button */}
+        {!isLoading && (
+          <TouchableOpacity
+            style={[styles.generateBtn, !canSubmit && { opacity: 0.5 }]}
+            onPress={handleGenerate}
+            disabled={!canSubmit}
+          >
+            <Text style={styles.generateBtnText}>✨ Generate Flashcards</Text>
+          </TouchableOpacity>
+        )}
+
+        {/* Progress Panel */}
+        {isLoading && (
+          <View style={styles.progressCard}>
+            <ActivityIndicator size="large" color={theme.colors.primary} />
+            <Text style={styles.progressTitle}>Generating Deck...</Text>
+            <Text style={styles.progressSub}>This runs fully on-device. It may take 30–60 seconds.</Text>
+
+            <View style={styles.stepsList}>
+              {steps.map((step, i) => (
+                <View key={i} style={styles.stepRow}>
+                  <View style={[
+                    styles.stepDot,
+                    step.done   && styles.stepDotDone,
+                    step.active && styles.stepDotActive,
+                  ]}>
+                    {step.active && <ActivityIndicator size="small" color="#FFF" />}
+                    {step.done   && <Text style={{ color: '#FFF', fontSize: 11, fontWeight: '700' }}>✓</Text>}
+                  </View>
+                  <Text style={[
+                    styles.stepLabel,
+                    step.done   && styles.stepLabelDone,
+                    step.active && styles.stepLabelActive,
+                  ]}>
+                    {step.label}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          </View>
+        )}
+
+        {/* Info cards */}
+        {!isLoading && (
+          <View style={styles.infoGrid}>
+            {[
+              { icon: '🔒', title: 'Fully Offline',     desc: 'AI runs on-device. No data ever leaves your phone.' },
+              { icon: '⚡', title: 'Instant Deck',       desc: 'Concept cards + quiz questions generated automatically.' },
+              { icon: '🧠', title: 'Spaced Repetition',  desc: 'FlowDeck tracks mastery and surfaces weak cards more.' },
+            ].map(card => (
+              <View key={card.title} style={styles.infoCard}>
+                <Text style={styles.infoIcon}>{card.icon}</Text>
+                <Text style={styles.infoTitle}>{card.title}</Text>
+                <Text style={styles.infoDesc}>{card.desc}</Text>
+              </View>
+            ))}
+          </View>
+        )}
+
       </ScrollView>
     </SafeAreaView>
   );
 };
 
+// ─── Styles ──────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: theme.colors.background },
-  scroll: { padding: theme.spacing.md, paddingBottom: 40 },
-  header: { marginBottom: 20 },
-  title: { color: theme.colors.textPrimary, fontSize: 26, fontWeight: '800' },
-  sub: { color: theme.colors.textSecondary, fontSize: 13, marginTop: 4 },
-  tabs: {
-    flexDirection: 'row', gap: 8, marginBottom: 16,
-    backgroundColor: theme.colors.surface, borderRadius: theme.borderRadius.md, padding: 4,
+  safe:   { flex: 1, backgroundColor: theme.colors.background },
+  scroll: { padding: 16, paddingBottom: 32 },
+
+  pageHeader: { marginBottom: 16 },
+  pageTitle:  { fontSize: 24, fontWeight: '900', color: theme.colors.textPrimary, letterSpacing: -0.5 },
+  pageSub:    { fontSize: 13, color: theme.colors.textSecondary, marginTop: 4, fontWeight: '500' },
+
+  // Mode Toggle
+  modeToggle: {
+    flexDirection: 'row', backgroundColor: '#FFFFFF', borderRadius: 12, padding: 4,
+    borderWidth: 1, borderColor: theme.colors.cardBorder, marginBottom: 14,
+    ...theme.shadows.xs,
   },
-  tabBtn: { flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: theme.borderRadius.sm },
-  tabBtnActive: { backgroundColor: theme.colors.primary },
-  tabText: { color: theme.colors.textMuted, fontSize: 14, fontWeight: '600' },
-  tabTextActive: { color: '#fff', fontWeight: '800' },
-  card: {
-    backgroundColor: theme.colors.surface, borderRadius: theme.borderRadius.lg,
-    borderWidth: 1, borderColor: theme.colors.cardBorder, padding: theme.spacing.md,
+  modeBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    paddingVertical: 11, borderRadius: 9,
   },
-  label: { color: theme.colors.textMuted, fontSize: 11, fontWeight: '700', letterSpacing: 1.5, marginBottom: 6, marginTop: 8, textTransform: 'uppercase' },
-  inputTitle: {
-    borderWidth: 1.5, borderColor: theme.colors.cardBorder, borderRadius: theme.borderRadius.md,
+  modeBtnActive: { backgroundColor: theme.colors.primaryLight, borderWidth: 1, borderColor: 'rgba(255,107,53,0.25)' },
+  modeBtnIcon:   { fontSize: 16 },
+  modeBtnLabel:  { fontSize: 14, fontWeight: '600', color: theme.colors.textMuted },
+  modeBtnLabelActive: { color: theme.colors.primary, fontWeight: '800' },
+
+  // Panel
+  panel: {
+    backgroundColor: '#FFFFFF', borderRadius: 14, padding: 14,
+    borderWidth: 1, borderColor: theme.colors.cardBorder, marginBottom: 14,
+    ...theme.shadows.xs,
+  },
+  panelLabel: {
+    fontSize: 10, fontWeight: '800', color: theme.colors.textMuted,
+    letterSpacing: 0.8, marginBottom: 10, textTransform: 'uppercase' as const,
+  },
+
+  textArea: {
+    borderWidth: 1.5, borderColor: theme.colors.cardBorder, borderRadius: 10,
     color: theme.colors.textPrimary, fontSize: 15, padding: 12,
-    backgroundColor: theme.colors.background, marginBottom: 16, fontWeight: '600',
+    backgroundColor: '#FAFAFA', minHeight: 160, lineHeight: 22,
   },
-  inputBody: {
-    borderWidth: 1.5, borderColor: theme.colors.cardBorder, borderRadius: theme.borderRadius.md,
-    color: theme.colors.textPrimary, fontSize: 14, padding: 12,
-    backgroundColor: theme.colors.background, minHeight: 140, marginBottom: 14,
-  },
-  previewBtn: {
-    borderWidth: 1, borderColor: theme.colors.glassBorder, borderRadius: theme.borderRadius.sm,
-    paddingVertical: 8, alignItems: 'center', marginBottom: 14,
-  },
-  previewBtnText: { color: theme.colors.primary, fontSize: 13, fontWeight: '700' },
-  previewSection: { marginBottom: 14 },
-  previewTitle: { color: theme.colors.textSecondary, fontSize: 12, fontWeight: '700', marginBottom: 8, marginTop: 4, textTransform: 'uppercase' },
-  chunkCard: {
-    flexDirection: 'row', backgroundColor: theme.colors.background,
-    borderRadius: theme.borderRadius.sm, padding: 10, marginBottom: 6, gap: 10,
-  },
-  chunkNum: {
-    width: 22, height: 22, borderRadius: 11,
-    backgroundColor: theme.colors.primaryGlow, justifyContent: 'center', alignItems: 'center',
-  },
-  chunkNumText: { color: theme.colors.primary, fontSize: 11, fontWeight: '800' },
-  chunkText: { flex: 1, color: theme.colors.textSecondary, fontSize: 12, lineHeight: 18 },
-  moreChunks: { color: theme.colors.textMuted, fontSize: 12, textAlign: 'center', marginBottom: 12, marginTop: 2 },
-  processingCard: { alignItems: 'center', padding: 24 },
-  processingText: { color: theme.colors.primary, fontSize: 15, fontWeight: '700', marginTop: 12, textAlign: 'center' },
-  processingSubText: { color: theme.colors.textSecondary, fontSize: 13, marginTop: 4, textAlign: 'center' },
-  successCard: {
-    backgroundColor: theme.colors.successBg, borderRadius: theme.borderRadius.lg,
-    borderWidth: 1, borderColor: theme.colors.success, padding: 24, alignItems: 'center',
-  },
-  successIcon: { fontSize: 36, marginBottom: 8 },
-  successTitle: { color: theme.colors.success, fontSize: 20, fontWeight: '900', marginBottom: 4 },
-  successSub: { color: theme.colors.textSecondary, fontSize: 13, marginBottom: 20, textAlign: 'center' },
-  studyNowBtn: {
-    backgroundColor: theme.colors.primary, borderRadius: theme.borderRadius.md,
-    paddingHorizontal: 32, paddingVertical: 14, marginBottom: 10,
-    shadowColor: theme.colors.primary, shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4, shadowRadius: 8, elevation: 5,
-  },
-  studyNowText: { color: '#fff', fontWeight: '800', fontSize: 15 },
-  importMoreBtn: { paddingVertical: 8 },
-  importMoreText: { color: theme.colors.textSecondary, fontSize: 13 },
-  atomizeBtn: {
-    backgroundColor: theme.colors.primary, borderRadius: theme.borderRadius.md,
-    paddingVertical: 16, alignItems: 'center', marginTop: 8,
-    shadowColor: theme.colors.primary, shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4, shadowRadius: 10, elevation: 5,
-  },
-  atomizeBtnText: { color: '#fff', fontSize: 15, fontWeight: '800' },
-  // PDF specific
+  charCount: { fontSize: 11, color: theme.colors.textMuted, textAlign: 'right', marginTop: 6, fontWeight: '600' },
+
+  // PDF
   pdfDropZone: {
-    borderWidth: 2, borderStyle: 'dashed', borderColor: theme.colors.cardBorder,
-    borderRadius: theme.borderRadius.lg, padding: 36, alignItems: 'center', marginBottom: 20,
+    borderWidth: 2, borderStyle: 'dashed', borderColor: theme.colors.accent,
+    borderRadius: 12, padding: 32, alignItems: 'center',
+    backgroundColor: theme.colors.accentLight,
   },
-  pdfIcon: { fontSize: 48, marginBottom: 12 },
-  pdfDropTitle: { color: theme.colors.textPrimary, fontSize: 18, fontWeight: '800', marginBottom: 8 },
-  pdfDropSub: { color: theme.colors.textSecondary, fontSize: 13, textAlign: 'center', lineHeight: 20, marginBottom: 20 },
-  pickBtn: {
-    backgroundColor: theme.colors.surface, borderWidth: 1.5, borderColor: theme.colors.primary,
-    borderRadius: theme.borderRadius.md, paddingHorizontal: 24, paddingVertical: 12,
-  },
-  pickBtnText: { color: theme.colors.primary, fontWeight: '700', fontSize: 14 },
-  pdfInfoRow: { flexDirection: 'row', justifyContent: 'space-around' },
-  pdfInfoItem: { alignItems: 'center', gap: 4 },
-  pdfInfoIcon: { fontSize: 20 },
-  pdfInfoText: { color: theme.colors.textSecondary, fontSize: 11, fontWeight: '600' },
-  pdfSuccessRow: {
+  pdfDropIcon:  { fontSize: 36, marginBottom: 10 },
+  pdfDropTitle: { fontSize: 15, fontWeight: '800', color: theme.colors.textPrimary, marginBottom: 4 },
+  pdfDropSub:   { fontSize: 12, color: theme.colors.textSecondary, fontWeight: '500' },
+
+  pdfSelectedBox: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
-    backgroundColor: theme.colors.background, borderRadius: theme.borderRadius.md,
-    padding: 12, marginBottom: 16,
+    backgroundColor: theme.colors.accentLight, borderRadius: 12, padding: 14,
+    borderWidth: 1, borderColor: theme.colors.accent,
+  },
+  pdfSelectedName: { fontSize: 14, fontWeight: '700', color: theme.colors.textPrimary, lineHeight: 18 },
+  pdfSelectedSub:  { fontSize: 11, color: theme.colors.accent, marginTop: 2, fontWeight: '600' },
+  pdfClearBtn: { padding: 6, backgroundColor: '#FFFFFF', borderRadius: 999, borderWidth: 1, borderColor: theme.colors.cardBorder },
+  pdfClearText: { fontSize: 11, color: theme.colors.textSecondary, fontWeight: '700' },
+
+  // Error
+  errorBox: {
+    backgroundColor: theme.colors.dangerBg, borderRadius: 10, padding: 12,
+    marginBottom: 14, borderWidth: 1, borderColor: 'rgba(239,68,68,0.2)',
+  },
+  errorText: { color: theme.colors.danger, fontSize: 13, fontWeight: '600' },
+
+  // Generate button
+  generateBtn: {
+    backgroundColor: theme.colors.primary, borderRadius: 14, paddingVertical: 16,
+    alignItems: 'center', marginBottom: 20, ...theme.shadows.primary,
+  },
+  generateBtnText: { color: '#FFFFFF', fontWeight: '900', fontSize: 16, letterSpacing: 0.3 },
+
+  // Progress card
+  progressCard: {
+    backgroundColor: '#FFFFFF', borderRadius: 16, padding: 24, alignItems: 'center',
+    borderWidth: 1, borderColor: theme.colors.cardBorder, marginBottom: 20,
+    ...theme.shadows.md,
+  },
+  progressTitle: { fontSize: 18, fontWeight: '800', color: theme.colors.textPrimary, marginTop: 12, marginBottom: 4 },
+  progressSub:   { fontSize: 13, color: theme.colors.textSecondary, textAlign: 'center', marginBottom: 20 },
+
+  stepsList: { width: '100%', gap: 10 },
+  stepRow:   { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  stepDot: {
+    width: 26, height: 26, borderRadius: 13,
+    backgroundColor: theme.colors.cardBorder, justifyContent: 'center', alignItems: 'center',
+  },
+  stepDotDone:   { backgroundColor: theme.colors.success },
+  stepDotActive: { backgroundColor: theme.colors.primary },
+  stepLabel:     { fontSize: 14, color: theme.colors.textMuted, fontWeight: '500' },
+  stepLabelDone: { color: theme.colors.success, fontWeight: '700' },
+  stepLabelActive:{ color: theme.colors.primary, fontWeight: '700' },
+
+  // Info cards
+  infoGrid: { gap: 10 },
+  infoCard: {
+    backgroundColor: '#FFFFFF', borderRadius: 14, padding: 16,
     borderWidth: 1, borderColor: theme.colors.cardBorder,
+    flexDirection: 'row', alignItems: 'flex-start', gap: 12,
+    ...theme.shadows.xs,
   },
-  pdfSuccessIcon: { fontSize: 28 },
-  pdfSuccessName: { color: theme.colors.textPrimary, fontSize: 14, fontWeight: '700' },
-  pdfSuccessMeta: { color: theme.colors.textSecondary, fontSize: 12, marginTop: 2 },
-  clearBtn: { padding: 6 },
-  clearBtnText: { color: theme.colors.textMuted, fontSize: 16 },
-  errorCard: {
-    alignItems: 'center', padding: 24,
-    backgroundColor: theme.colors.dangerBg,
-    borderRadius: theme.borderRadius.lg, borderWidth: 1, borderColor: theme.colors.danger,
-  },
-  errorIcon: { fontSize: 36, marginBottom: 8 },
-  errorTitle: { color: theme.colors.danger, fontSize: 17, fontWeight: '800', marginBottom: 8 },
-  errorMsg: { color: theme.colors.textSecondary, fontSize: 13, textAlign: 'center', lineHeight: 20, marginBottom: 16 },
-  retryBtn: {
-    borderWidth: 1.5, borderColor: theme.colors.danger, borderRadius: theme.borderRadius.md,
-    paddingHorizontal: 24, paddingVertical: 10,
-  },
-  retryBtnText: { color: theme.colors.danger, fontWeight: '700', fontSize: 14 },
-  progressiveInfoCard: {
-    backgroundColor: theme.colors.background,
-    borderRadius: theme.borderRadius.md,
-    borderWidth: 1,
-    borderColor: theme.colors.cardBorder,
-    padding: 12,
-    marginBottom: 16,
-    marginTop: 8,
-  },
-  progressiveInfoTitle: {
-    color: theme.colors.primary,
-    fontSize: 13,
-    fontWeight: '800',
-    marginBottom: 6,
-  },
-  progressiveInfoBody: {
-    color: theme.colors.textSecondary,
-    fontSize: 12,
-    lineHeight: 18,
-    marginBottom: 6,
-  },
+  infoIcon:  { fontSize: 22, marginTop: 2 },
+  infoTitle: { fontSize: 14, fontWeight: '800', color: theme.colors.textPrimary, marginBottom: 3 },
+  infoDesc:  { fontSize: 12, color: theme.colors.textSecondary, lineHeight: 16 },
 });

@@ -1,340 +1,232 @@
+// src/components/SwipeCard.tsx — FlowDeck Reel Card
 import React, { useState, useRef, useEffect } from 'react';
 import {
   StyleSheet, View, Text, Dimensions,
-  Animated, PanResponder, TouchableOpacity,
-  ActivityIndicator,
+  Animated, TouchableOpacity, ActivityIndicator,
 } from 'react-native';
 import Tts from 'react-native-tts';
 import { theme } from '../styles/theme';
 import { ConceptCard } from '../services/llmService';
 
-// Initialize Text-To-Speech defaults
 try {
   Tts.setDefaultLanguage('en-US');
   Tts.setDefaultRate(0.5);
-} catch (err) {
-  console.log('[TTS] Initialization warning:', err);
-}
+} catch (_) {}
 
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
-const SWIPE_THRESHOLD = SCREEN_WIDTH * 0.35;
+const { width: W } = Dimensions.get('window');
 
-interface SwipeCardProps {
+interface Props {
   card: ConceptCard;
   isTop: boolean;
   isLoading?: boolean;
-  onSwipeLeft: () => void;
-  onSwipeRight: () => void;
   onVoiceLoop: () => void;
+  height: number;
+  cardIndex: number;      // 1-based display number
+  totalCards: number;
 }
 
-export const SwipeCard: React.FC<SwipeCardProps> = ({
-  card, isTop, isLoading = false, onSwipeLeft, onSwipeRight, onVoiceLoop,
+export const SwipeCard: React.FC<Props> = ({
+  card, isTop, isLoading = false, onVoiceLoop, height, cardIndex, totalCards,
 }) => {
-  const [isFlipped, setIsFlipped] = useState(false);
-  const position = useRef(new Animated.ValueXY()).current;
+  const [flipped, setFlipped] = useState(false);
   const flipAnim = useRef(new Animated.Value(0)).current;
 
-  // Stop any active TTS when card ID changes or component unmounts
-  useEffect(() => {
-    return () => {
-      try {
-        Tts.stop();
-      } catch (err) {}
-    };
-  }, [card.id]);
+  useEffect(() => () => { try { Tts.stop(); } catch (_) {} }, [card.id]);
 
-  const handleSpeak = (text: string) => {
-    try {
-      Tts.stop();
-      Tts.speak(text);
-    } catch (err) {
-      console.log('[TTS] Error speaking:', err);
-    }
+  const speak = (txt: string) => { try { Tts.stop(); Tts.speak(txt); } catch (_) {} };
+
+  const frontRY = flipAnim.interpolate({ inputRange: [0, 180], outputRange: ['0deg', '180deg'] });
+  const backRY  = flipAnim.interpolate({ inputRange: [0, 180], outputRange: ['180deg', '360deg'] });
+
+  const doFlip = () => {
+    Animated.spring(flipAnim, { toValue: flipped ? 0 : 180, friction: 8, useNativeDriver: true }).start();
+    setFlipped(f => !f);
   };
 
-  const rotate = position.x.interpolate({
-    inputRange: [-SCREEN_WIDTH / 2, 0, SCREEN_WIDTH / 2],
-    outputRange: ['-8deg', '0deg', '8deg'],
-    extrapolate: 'clamp',
-  });
-
-  const gotItOpacity = position.x.interpolate({
-    inputRange: [0, SWIPE_THRESHOLD / 2],
-    outputRange: [0, 1],
-    extrapolate: 'clamp',
-  });
-
-  const simplifyOpacity = position.x.interpolate({
-    inputRange: [-SWIPE_THRESHOLD / 2, 0],
-    outputRange: [1, 0],
-    extrapolate: 'clamp',
-  });
-
-  const frontRotateY = flipAnim.interpolate({
-    inputRange: [0, 180],
-    outputRange: ['0deg', '180deg'],
-  });
-
-  const backRotateY = flipAnim.interpolate({
-    inputRange: [0, 180],
-    outputRange: ['180deg', '360deg'],
-  });
-
-  const handleFlip = () => {
-    const toValue = isFlipped ? 0 : 180;
-    Animated.spring(flipAnim, { toValue, friction: 8, useNativeDriver: true }).start();
-    setIsFlipped(!isFlipped);
-  };
-
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => isTop && !isLoading,
-      onMoveShouldSetPanResponder: (_, gs) => isTop && !isLoading && Math.abs(gs.dx) > 5,
-      onPanResponderMove: (_, gs) => {
-        position.setValue({ x: gs.dx, y: gs.dy * 0.2 });
-      },
-      onPanResponderRelease: (_, gs) => {
-        if (gs.vx < -0.5 || gs.dx < -SWIPE_THRESHOLD) {
-          // Swipe Left (Simplify) -> Spring back to center instead of flying off-screen!
-          Animated.spring(position, {
-            toValue: { x: 0, y: 0 },
-            friction: 5,
-            useNativeDriver: true,
-          }).start(() => { onSwipeLeft(); });
-        } else if (gs.vx > 0.5 || gs.dx > SWIPE_THRESHOLD) {
-          // Swipe Right (Mastered) -> Animate off-screen
-          Animated.timing(position, {
-            toValue: { x: SCREEN_WIDTH * 1.5, y: gs.dy },
-            duration: 250,
-            useNativeDriver: true,
-          }).start(() => { position.setValue({ x: 0, y: 0 }); onSwipeRight(); });
-        } else {
-          Animated.spring(position, {
-            toValue: { x: 0, y: 0 },
-            friction: 5,
-            useNativeDriver: true,
-          }).start();
-        }
-      },
-    })
-  ).current;
+  // Build title from card concept, e.g. "Newton's 1st Law — Explanation"
+  const cardTitle    = card.concept;
+  const cardSubtitle = `Card ${cardIndex} of ${totalCards}`;
 
   return (
-    <Animated.View
-      style={[
-        styles.cardContainer,
-        { transform: [{ translateX: position.x }, { translateY: position.y }, { rotate }] },
-      ]}
-      {...panResponder.panHandlers}
-    >
-      {/* GOT IT badge */}
-      <Animated.View style={[styles.badge, styles.badgeGotIt, { opacity: gotItOpacity }]}>
-        <Text style={styles.badgeText}>GOT IT!</Text>
-      </Animated.View>
+    <View style={[styles.wrap, { height: height - 120 }]}>
 
-      {/* SIMPLIFY badge */}
-      <Animated.View style={[styles.badge, styles.badgeSimplify, { opacity: simplifyOpacity }]}>
-        <Text style={styles.badgeText}>SIMPLIFY</Text>
-      </Animated.View>
-
-      {/* FRONT */}
+      {/* ── FRONT ───────────────────────────────────────────────────────── */}
       <Animated.View
-        style={[
-          styles.face, styles.front,
-          { transform: [{ rotateY: frontRotateY }] },
-        ]}
-        pointerEvents={isFlipped ? 'none' : 'auto'}
+        style={[styles.face, styles.front, { transform: [{ rotateY: frontRY }] }]}
+        pointerEvents={flipped ? 'none' : 'auto'}
       >
-        <TouchableOpacity style={styles.faceInner} onPress={handleFlip} activeOpacity={1}>
-          <View style={styles.faceHeader}>
-            <Text style={styles.conceptTitle}>{card.concept}</Text>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-              <TouchableOpacity onPress={(e) => { e.stopPropagation(); handleSpeak(card.explanation); }} style={{ padding: 4 }}>
-                <Text style={{ fontSize: 16 }}>🔊</Text>
+        <TouchableOpacity style={styles.inner} onPress={doFlip} activeOpacity={1}>
+
+          {/* Card header */}
+          <View style={styles.cardHeader}>
+            <View style={styles.headerLeft}>
+              <View style={styles.conceptTag}>
+                <Text style={styles.conceptTagText} numberOfLines={1}>{cardTitle}</Text>
+              </View>
+              <Text style={styles.subtitleText}>{cardSubtitle}</Text>
+            </View>
+            <View style={styles.headerRight}>
+              <TouchableOpacity
+                style={styles.speakBtn}
+                onPress={e => { e.stopPropagation(); speak(card.explanation); }}
+              >
+                <Text style={{ fontSize: 15 }}>🔊</Text>
               </TouchableOpacity>
-              <Text style={styles.flipHint}>Tap to flip</Text>
+              <Text style={styles.flipHintText}>Tap to flip</Text>
             </View>
           </View>
-          <View style={styles.faceBody}>
+
+          {/* Divider */}
+          <View style={styles.divider} />
+
+          {/* Body — explanation */}
+          <View style={styles.cardBody}>
+            <Text style={styles.sectionLabel}>EXPLANATION</Text>
             {isLoading ? (
-              <ActivityIndicator size="large" color={theme.colors.primary} />
+              <View style={styles.skeletonWrap}>
+                <ActivityIndicator size="large" color={theme.colors.primary} />
+                <Text style={styles.skeletonText}>Simplifying explanation...</Text>
+              </View>
             ) : (
               <Text style={styles.explanationText}>{card.explanation}</Text>
             )}
           </View>
-          <View style={styles.faceFooter}>
-            <Text style={styles.instructionText}>← Simplify   |   Got it! →</Text>
+
+          {/* Footer */}
+          <View style={styles.cardFooter}>
+            <View style={styles.masteredBadge}>
+              {card.isMastered && <Text style={styles.masteredText}>✅ Mastered</Text>}
+            </View>
+            <Text style={styles.flipCta}>Tap to see Recall Challenge →</Text>
           </View>
+
         </TouchableOpacity>
       </Animated.View>
 
-      {/* BACK */}
+      {/* ── BACK ────────────────────────────────────────────────────────── */}
       <Animated.View
-        style={[
-          styles.face, styles.back,
-          { transform: [{ rotateY: backRotateY }] },
-        ]}
-        pointerEvents={isFlipped ? 'auto' : 'none'}
+        style={[styles.face, styles.back, { transform: [{ rotateY: backRY }] }]}
+        pointerEvents={flipped ? 'auto' : 'none'}
       >
-        <TouchableOpacity style={styles.faceInner} onPress={handleFlip} activeOpacity={1}>
-          <View style={styles.faceHeader}>
-            <Text style={[styles.conceptTitle, { color: theme.colors.accent }]}>Recall Challenge</Text>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-              <TouchableOpacity onPress={(e) => { e.stopPropagation(); handleSpeak(`Question: ${card.quizQuestion}. Answer: ${card.quizAnswer}`); }} style={{ padding: 4 }}>
-                <Text style={{ fontSize: 16 }}>🔊</Text>
+        <TouchableOpacity style={styles.inner} onPress={doFlip} activeOpacity={1}>
+
+          {/* Card header */}
+          <View style={styles.cardHeader}>
+            <View style={styles.headerLeft}>
+              <View style={[styles.conceptTag, { backgroundColor: theme.colors.accentLight, borderColor: theme.colors.accent }]}>
+                <Text style={[styles.conceptTagText, { color: theme.colors.accent }]} numberOfLines={1}>Recall Challenge</Text>
+              </View>
+              <Text style={styles.subtitleText}>{cardTitle}</Text>
+            </View>
+            <View style={styles.headerRight}>
+              <TouchableOpacity
+                style={styles.speakBtn}
+                onPress={e => { e.stopPropagation(); speak(`Question: ${card.quizQuestion}. Answer: ${card.quizAnswer}`); }}
+              >
+                <Text style={{ fontSize: 15 }}>🔊</Text>
               </TouchableOpacity>
-              <Text style={styles.flipHint}>Tap to flip</Text>
+              <Text style={styles.flipHintText}>Tap to flip</Text>
             </View>
           </View>
-          <View style={styles.faceBody}>
-            <Text style={styles.quizLabel}>QUESTION:</Text>
+
+          <View style={styles.divider} />
+
+          <View style={styles.cardBody}>
+            <Text style={[styles.sectionLabel, { color: theme.colors.accent }]}>QUESTION</Text>
             <Text style={styles.questionText}>{card.quizQuestion}</Text>
-            <Text style={styles.answerLabel}>ANSWER:</Text>
-            <Text style={styles.answerText}>{card.quizAnswer}</Text>
+
+            <View style={styles.answerBox}>
+              <Text style={styles.answerLabel}>✅ ANSWER</Text>
+              <Text style={styles.answerText}>{card.quizAnswer}</Text>
+            </View>
           </View>
-          <TouchableOpacity style={styles.voiceButton} onPress={onVoiceLoop}>
-            <Text style={styles.voiceButtonText}>🎙️ Teach Me Back (Feynman Loop)</Text>
+
+          <TouchableOpacity style={styles.voiceBtn} onPress={onVoiceLoop}>
+            <Text style={styles.voiceBtnText}>🎙️ Teach Me Back (Voice Test)</Text>
           </TouchableOpacity>
+
         </TouchableOpacity>
       </Animated.View>
-    </Animated.View>
+    </View>
   );
 };
 
 const styles = StyleSheet.create({
-  cardContainer: {
-    width: SCREEN_WIDTH - 32,
-    height: SCREEN_HEIGHT * 0.55,
-    alignSelf: 'center',
-  },
+  wrap: { width: W - 24, alignSelf: 'center', position: 'relative' },
+
   face: {
-    position: 'absolute',
-    width: '100%',
-    height: '100%',
-    borderRadius: theme.borderRadius.lg,
-    borderWidth: 1.5,
-    borderColor: theme.colors.cardBorder,
-    backfaceVisibility: 'hidden',
-    overflow: 'hidden',
+    position: 'absolute', width: '100%', height: '100%',
+    borderRadius: 18, backfaceVisibility: 'hidden', overflow: 'hidden',
+    borderWidth: 1, borderColor: theme.colors.cardBorder,
+    ...theme.shadows.md,
   },
-  front: {
-    backgroundColor: theme.colors.cardBackground,
+  front: { backgroundColor: '#FFFFFF' },
+  back:  { backgroundColor: '#FAFAFA' },
+
+  inner: { flex: 1, padding: 18, justifyContent: 'space-between' },
+
+  // Header
+  cardHeader: {
+    flexDirection: 'row', justifyContent: 'space-between',
+    alignItems: 'flex-start',
   },
-  back: {
-    backgroundColor: '#1C263A',
+  headerLeft: { flex: 1, marginRight: 8 },
+  headerRight: { alignItems: 'flex-end', gap: 6 },
+
+  conceptTag: {
+    alignSelf: 'flex-start', backgroundColor: theme.colors.primaryLight,
+    borderRadius: 8, borderWidth: 1, borderColor: 'rgba(255,107,53,0.2)',
+    paddingHorizontal: 10, paddingVertical: 4, marginBottom: 4,
   },
-  faceInner: {
-    flex: 1,
-    padding: theme.spacing.lg,
-    justifyContent: 'space-between',
+  conceptTagText: { fontSize: 12, fontWeight: '800', color: theme.colors.primary },
+  subtitleText: { fontSize: 11, color: theme.colors.textMuted, fontWeight: '500' },
+
+  speakBtn: {
+    width: 32, height: 32, borderRadius: 8,
+    backgroundColor: theme.colors.primaryLight,
+    borderWidth: 1, borderColor: 'rgba(255,107,53,0.15)',
+    justifyContent: 'center', alignItems: 'center',
   },
-  faceHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.cardBorder,
-    paddingBottom: theme.spacing.sm,
+  flipHintText: { fontSize: 10, color: theme.colors.textMuted, fontWeight: '600' },
+
+  divider: { height: 1, backgroundColor: theme.colors.separator, marginVertical: 12 },
+
+  // Body
+  cardBody: { flex: 1 },
+  sectionLabel: {
+    fontSize: 10, fontWeight: '800', color: theme.colors.primary,
+    letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 10,
   },
-  conceptTitle: {
-    color: theme.colors.primary,
-    fontSize: 18,
-    fontWeight: 'bold',
-    maxWidth: '70%',
-  },
-  flipHint: {
-    color: theme.colors.textMuted,
-    fontSize: 11,
-    fontWeight: '600',
-    textTransform: 'uppercase',
-  },
-  faceBody: {
-    flex: 1,
-    justifyContent: 'center',
-    paddingVertical: theme.spacing.md,
-  },
-  faceFooter: {
-    alignItems: 'center',
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.cardBorder,
-    paddingTop: theme.spacing.sm,
-  },
+
+  skeletonWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10 },
+  skeletonText: { fontSize: 13, color: theme.colors.textSecondary, fontWeight: '600' },
+
   explanationText: {
-    color: theme.colors.textPrimary,
-    fontSize: 20,
-    lineHeight: 32,
-    textAlign: 'center',
-    fontWeight: '500',
+    fontSize: 17, fontWeight: '600', color: theme.colors.textPrimary,
+    lineHeight: 26, textAlign: 'left',
   },
-  instructionText: {
-    color: theme.colors.textMuted,
-    fontSize: 10,
-    fontWeight: '600',
-  },
-  quizLabel: {
-    color: theme.colors.accent,
-    fontSize: 11,
-    fontWeight: 'bold',
-    marginBottom: theme.spacing.xs,
-  },
+
+  // Footer
+  cardFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: 10, borderTopWidth: 1, borderTopColor: theme.colors.separator },
+  masteredBadge: {},
+  masteredText: { fontSize: 12, fontWeight: '700', color: theme.colors.success },
+  flipCta: { fontSize: 11, color: theme.colors.textMuted, fontWeight: '600' },
+
+  // Back face
   questionText: {
-    color: theme.colors.textPrimary,
-    fontSize: 16,
-    lineHeight: 24,
-    fontWeight: '500',
-    marginBottom: theme.spacing.md,
+    fontSize: 16, fontWeight: '700', color: theme.colors.textPrimary,
+    lineHeight: 24, marginBottom: 16,
   },
-  answerLabel: {
-    color: theme.colors.textSecondary,
-    fontSize: 11,
-    fontWeight: 'bold',
-    marginBottom: theme.spacing.xs,
+  answerBox: {
+    backgroundColor: theme.colors.accentLight, borderRadius: 10, padding: 12,
+    borderWidth: 1, borderColor: 'rgba(0,168,150,0.15)',
   },
-  answerText: {
-    color: theme.colors.textPrimary,
-    fontSize: 15,
-    lineHeight: 22,
-    fontStyle: 'italic',
+  answerLabel: { fontSize: 10, fontWeight: '800', color: theme.colors.accent, marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 },
+  answerText:  { fontSize: 14, fontWeight: '600', color: theme.colors.textPrimary, lineHeight: 20 },
+
+  voiceBtn: {
+    backgroundColor: theme.colors.accent, borderRadius: 12, paddingVertical: 13,
+    alignItems: 'center', ...theme.shadows.accent,
   },
-  voiceButton: {
-    backgroundColor: `${theme.colors.accent}22`,
-    borderWidth: 1.5,
-    borderColor: theme.colors.accent,
-    borderRadius: theme.borderRadius.md,
-    paddingVertical: theme.spacing.md,
-    alignItems: 'center',
-    marginTop: theme.spacing.sm,
-  },
-  voiceButtonText: {
-    color: theme.colors.accent,
-    fontWeight: 'bold',
-    fontSize: 14,
-  },
-  badge: {
-    position: 'absolute',
-    top: 25,
-    zIndex: 10,
-    borderWidth: 2,
-    borderRadius: theme.borderRadius.sm,
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.xs,
-  },
-  badgeGotIt: {
-    right: 25,
-    borderColor: theme.colors.success,
-    backgroundColor: `${theme.colors.success}33`,
-    transform: [{ rotate: '-15deg' }],
-  },
-  badgeSimplify: {
-    left: 25,
-    borderColor: theme.colors.primary,
-    backgroundColor: `${theme.colors.primary}33`,
-    transform: [{ rotate: '15deg' }],
-  },
-  badgeText: {
-    color: theme.colors.textPrimary,
-    fontSize: 14,
-    fontWeight: 'bold',
-  },
+  voiceBtnText: { color: '#FFFFFF', fontWeight: '800', fontSize: 14 },
 });

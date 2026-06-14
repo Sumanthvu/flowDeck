@@ -8,6 +8,7 @@ import { ImportScreen } from "./src/screens/main/ImportScreen";
 import { ProfileScreen } from "./src/screens/main/ProfileScreen";
 import { SwipeScreen } from "./src/screens/SwipeScreen";
 import { VoiceScreen } from "./src/screens/VoiceScreen";
+import { RevisionScreen } from "./src/screens/RevisionScreen";
 import { authService } from "./src/services/authService";
 import { llmService, Deck } from "./src/services/llmService";
 import { theme } from "./src/styles/theme";
@@ -15,8 +16,10 @@ import { theme } from "./src/styles/theme";
 type AppView =
   | { type: "auth" }
   | { type: "main"; tab: MainTab }
-  | { type: "swipe"; deck: Deck; initialIndex?: number }
-  | { type: "voice"; deck: Deck; cardIndex: number };
+  // sourceTab lets SwipeScreen / RevisionScreen know which tab to return to
+  | { type: "swipe"; deck: Deck; initialIndex?: number; sourceTab: MainTab }
+  | { type: "voice"; deck: Deck; cardIndex: number; sourceTab: MainTab }
+  | { type: "revision"; deck: Deck; sourceTab: MainTab };
 
 export default function App() {
   const [view, setView] = useState<AppView>({ type: "auth" });
@@ -30,15 +33,32 @@ export default function App() {
     });
   }, []);
 
-  const handleAuth = () => setView({ type: "main", tab: "home" });
-  const handleLogout = () => { setActiveTab("home"); setView({ type: "auth" }); };
+  const handleAuth    = () => setView({ type: "main", tab: "home" });
+  const handleLogout  = () => { setActiveTab("home"); setView({ type: "auth" }); };
 
-  const handleSelectDeck = (deck: Deck) => setView({ type: "swipe", deck, initialIndex: 0 });
-  const handleDeckCreated = (deck: Deck) => {
-    llmService.getDecks().then(() => setView({ type: "swipe", deck, initialIndex: 0 }));
+  // ── Select a deck to study ────────────────────────────────────────────────
+  const handleSelectDeck = (deck: Deck, sourceTab?: MainTab) => {
+    const firstUnmastered = deck.cards.findIndex(c => !c.isMastered);
+    const startIdx = firstUnmastered !== -1 ? firstUnmastered : 0;
+    setView({ type: "swipe", deck, initialIndex: startIdx, sourceTab: sourceTab ?? activeTab });
   };
-  const handleVoiceChallenge = (deck: Deck, cardIndex: number) => setView({ type: "voice", deck, cardIndex });
-  const handleBackToMain = () => { setView({ type: "main", tab: activeTab }); };
+
+  // ── After deck is created, always go to swipe from import ────────────────
+  const handleDeckCreated = (deck: Deck) => {
+    llmService.getDecks().then(() =>
+      setView({ type: "swipe", deck, initialIndex: 0, sourceTab: "import" })
+    );
+  };
+
+  // ── Voice challenge ──────────────────────────────────────────────────────
+  const handleVoiceChallenge = (deck: Deck, cardIndex: number, sourceTab: MainTab) =>
+    setView({ type: "voice", deck, cardIndex, sourceTab });
+
+  // ── Back to the tab the user came from ──────────────────────────────────
+  const handleBackToSource = (sourceTab: MainTab) => {
+    setActiveTab(sourceTab);
+    setView({ type: "main", tab: sourceTab });
+  };
 
   const handleTabChange = (tab: MainTab) => {
     setActiveTab(tab);
@@ -62,8 +82,10 @@ export default function App() {
       <SwipeScreen
         deck={view.deck}
         initialIndex={view.initialIndex || 0}
-        onBack={handleBackToMain}
-        onVoiceChallenge={(cardIndex) => handleVoiceChallenge(view.deck, cardIndex)}
+        onBack={() => handleBackToSource(view.sourceTab)}
+        onVoiceChallenge={(cardIndex) =>
+          handleVoiceChallenge(view.deck, cardIndex, view.sourceTab)
+        }
       />
     );
   }
@@ -73,12 +95,23 @@ export default function App() {
     return (
       <VoiceScreen
         card={activeCard}
-        onGoBack={() => setView({ type: "swipe", deck: view.deck, initialIndex: view.cardIndex })}
+        onGoBack={() =>
+          setView({ type: "swipe", deck: view.deck, initialIndex: view.cardIndex, sourceTab: view.sourceTab })
+        }
         onFeedbackComplete={(score) => {
           activeCard.scoreTransfer = score;
           if (score >= 80) activeCard.isMastered = true;
-          setView({ type: "swipe", deck: view.deck, initialIndex: view.cardIndex });
+          setView({ type: "swipe", deck: view.deck, initialIndex: view.cardIndex, sourceTab: view.sourceTab });
         }}
+      />
+    );
+  }
+
+  if (view.type === "revision") {
+    return (
+      <RevisionScreen
+        deck={view.deck}
+        onBack={() => handleBackToSource(view.sourceTab)}
       />
     );
   }
@@ -87,14 +120,15 @@ export default function App() {
     <MainNavigator currentTab={activeTab} onTabChange={handleTabChange}>
       {activeTab === "home" && (
         <HomeScreen
-          onSelectDeck={handleSelectDeck}
+          onSelectDeck={(deck) => handleSelectDeck(deck, "home")}
           onGoToImport={() => handleTabChange("import")}
           onGoToLearn={() => handleTabChange("learn")}
         />
       )}
       {activeTab === "learn" && (
         <DeckListScreen
-          onSelectDeck={handleSelectDeck}
+          onSelectDeck={(deck) => handleSelectDeck(deck, "learn")}
+          onReviseDeck={(deck) => setView({ type: "revision", deck, sourceTab: "learn" })}
           onGoToImport={() => handleTabChange("import")}
         />
       )}

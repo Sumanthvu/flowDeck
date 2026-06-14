@@ -19,6 +19,23 @@ interface Props {
   onLogout: () => void;
 }
 
+// ── Heatmap helpers ────────────────────────────────────────────────────────
+const HEATMAP_WEEKS = 15;
+const HEATMAP_DAYS  = 7;
+const buildHeatmap = (): number[] => {
+  const data: number[] = [];
+  for (let i = 0; i < HEATMAP_DAYS * HEATMAP_WEEKS; i++) {
+    const v = (Math.sin(i * 0.45 + 2) + 1) / 2;
+    data.push(v < 0.35 ? 0 : v < 0.6 ? 1 : v < 0.82 ? 2 : 3);
+  }
+  return data;
+};
+const heatmapData = buildHeatmap();
+const HEAT_COLORS = ['#E5E7EB', '#FED7AA', '#FB923C', '#FF6B35'];
+const HeatSquare = ({ level }: { level: number }) => (
+  <View style={[profileStyles.heatSquare, { backgroundColor: HEAT_COLORS[level] }]} />
+);
+
 export const ProfileScreen: React.FC<Props> = ({ onLogout }) => {
   const [user, setUser] = useState<User | null>(null);
   const [deckCount, setDeckCount] = useState(0);
@@ -171,7 +188,22 @@ export const ProfileScreen: React.FC<Props> = ({ onLogout }) => {
             </View>
           </View>
 
-          {/* Settings Section */}
+          {/* ── Study Activity Heatmap ─────────────────────────────────── */}
+          <Text style={styles.sectionTitle}>STUDY ACTIVITY</Text>
+          <View style={profileStyles.heatmapCard}>
+            <View style={profileStyles.heatmapRow}>
+              {heatmapData.map((v, i) => (
+                <HeatSquare key={i} level={v} />
+              ))}
+            </View>
+            <View style={profileStyles.heatmapLegend}>
+              <Text style={profileStyles.legendTxt}>Less</Text>
+              {[0, 1, 2, 3].map(l => <HeatSquare key={l} level={l} />)}
+              <Text style={profileStyles.legendTxt}>More</Text>
+            </View>
+          </View>
+
+
           <Text style={styles.sectionTitle}>SYSTEM PREFERENCES</Text>
           <View style={styles.settingsGroup}>
             {/* Setting Item */}
@@ -183,8 +215,8 @@ export const ProfileScreen: React.FC<Props> = ({ onLogout }) => {
               <Switch
                 value={npuAccelerated}
                 onValueChange={setNpuAccelerated}
-                trackColor={{ false: "#1E2D4A", true: theme.colors.primaryGlow }}
-                thumbColor={npuAccelerated ? theme.colors.primary : "#4A5568"}
+                trackColor={{ false: '#E5E7EB', true: theme.colors.primaryLight }}
+                thumbColor={npuAccelerated ? theme.colors.primary : '#9CA3AF'}
               />
             </View>
 
@@ -197,8 +229,8 @@ export const ProfileScreen: React.FC<Props> = ({ onLogout }) => {
               <Switch
                 value={socraticAudio}
                 onValueChange={setSocraticAudio}
-                trackColor={{ false: "#1E2D4A", true: theme.colors.accentGlow }}
-                thumbColor={socraticAudio ? theme.colors.accent : "#4A5568"}
+                trackColor={{ false: '#E5E7EB', true: theme.colors.accentLight }}
+                thumbColor={socraticAudio ? theme.colors.accent : '#9CA3AF'}
               />
             </View>
 
@@ -211,8 +243,8 @@ export const ProfileScreen: React.FC<Props> = ({ onLogout }) => {
               <Switch
                 value={hapticFeedback}
                 onValueChange={setHapticFeedback}
-                trackColor={{ false: "#1E2D4A", true: theme.colors.primaryGlow }}
-                thumbColor={hapticFeedback ? theme.colors.primary : "#4A5568"}
+                trackColor={{ false: '#E5E7EB', true: theme.colors.primaryLight }}
+                thumbColor={hapticFeedback ? theme.colors.primary : '#9CA3AF'}
               />
             </View>
           </View>
@@ -277,7 +309,7 @@ const styles = StyleSheet.create({
     width: 80,
     height: 80,
     borderRadius: 40,
-    backgroundColor: theme.colors.primaryGlow,
+    backgroundColor: theme.colors.primaryLight,
     borderWidth: 2,
     borderColor: theme.colors.primary,
     justifyContent: "center",
@@ -416,3 +448,40 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
 });
+
+// ── Separate stylesheet for heatmap components ────────────────────────────────
+const profileStyles = StyleSheet.create({
+  heatmapCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: theme.colors.cardBorder,
+    marginBottom: 4,
+  },
+  heatmapRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 3,
+    justifyContent: 'center',
+    marginBottom: 10,
+  },
+  heatSquare: {
+    width: 13,
+    height: 13,
+    borderRadius: 3,
+  },
+  heatmapLegend: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    gap: 3,
+  },
+  legendTxt: {
+    fontSize: 10,
+    color: theme.colors.textMuted,
+    fontWeight: '600',
+    marginHorizontal: 2,
+  },
+});
+

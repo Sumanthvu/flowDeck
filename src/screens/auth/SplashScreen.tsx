@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, Animated, StatusBar } from 'react-native';
 import { theme } from '../../styles/theme';
 
@@ -53,7 +53,7 @@ const styles = StyleSheet.create({
     width: 300,
     height: 300,
     borderRadius: 150,
-    backgroundColor: theme.colors.primaryGlow,
+    backgroundColor: theme.colors.primaryLight,
   },
   logoWrapper: { alignItems: 'center' },
   logo: {
@@ -81,7 +81,7 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.glassBg,
   },
   badgeText: {
-    color: theme.colors.neon,
+    color: theme.colors.accent,
     fontSize: 12,
     fontWeight: '600',
   },

@@ -383,12 +383,19 @@ Original explanation: "${previousExplanation}"<|im_end|>
     await ensureModelLoaded();
 
     const prompt = `<|im_start|>system
-You are grading a student's spoken explanation of a concept.
-Grade the student's explanation based on accuracy and completeness compared to the reference explanation.
+You are a highly strict, rigorous, and demanding academic evaluator. Your job is to strictly grade a student's explanation against the reference definition. Do not be generous or lenient.
+
+Strict Grading Rules:
+1. If the student's explanation is empty, silent, generic (e.g., "I don't know", "no idea", "what", "test", "hello", "hi"), or completely off-topic, you MUST immediately assign a grade of "F" and a score of 0.
+2. If the student's answer is extremely vague, brief, or fails to capture the core scientific/technical mechanism of the reference, you MUST grade it as "F" or "C" (score below 50).
+3. If the student only mentions some keywords but doesn't explain the logic or connection, grade it as "C" or "F".
+4. To get a "B", the explanation must be mostly accurate and cover at least 70% of the core concepts in the reference.
+5. To get an "A", the explanation must be fully complete, scientifically accurate, and cover all aspects of the reference.
+
 Return ONLY valid JSON with this exact structure, with no markdown formatting:
 {
   "grade": "A" | "B" | "C" | "F",
-  "feedback": "one or two sentences of feedback",
+  "feedback": "a harsh, direct Socratic critique highlighting exactly what they missed",
   "score": 0-100
 }<|im_end|>
 <|im_start|>user
